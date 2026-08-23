@@ -1,0 +1,265 @@
+import Foundation
+import SwiftUI
+import UserNotifications
+import QuickDownCore
+
+// MARK: - 应用模型（连接引擎与界面）
+
+@MainActor
+final class AppModel: ObservableObject {
+
+    let manager: DownloadManager
+    private var server: LocalServer?
+
+    @Published var records: [DownloadRecord] = []
+    @Published var selectedID: UUID?
+    @Published var speeds: [UUID: Double] = [:]
+    @Published var serverPort: UInt16 = 10007
+    @Published var showAddSheet = false
+
+    private var lastSnapshot: [UUID: (bytes: Int64, date: Date)] = [:]
+    private var ticker: Timer?
+    private var speedEMA: [UUID: Double] = [:]
+
+    init() {
+        manager = DownloadManager.shared
+        manager.onChange = { [weak self] in
+            Task { @MainActor in
+                self?.needsRefresh = true
+                self?.refresh()
+            }
+        }
+        manager.onCompleted = { [weak self] rec in
+            Task { @MainActor in self?.notifyCompleted(rec) }
+        }
+        startServer()
+        refresh()
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        ticker = t
+    }
+
+    // MARK: - 服务器
+
+    func startServer() {
+        let port = SettingsStore.shared.settings.serverPort
+        let server = LocalServer(manager: manager, port: port)
+        do {
+            try server.start()
+            serverPort = server.port
+        } catch {
+            serverPort = 0
+        }
+        self.server = server
+    }
+
+    // MARK: - 刷新
+
+    private var hasAutoSelected = false
+
+    func refresh() {
+        records = manager.snapshot()
+        // 仅当选中项被删除时清空；不自动重新选中（否则点击空白处取消选择后会被定时器强行拉回，造成闪烁）
+        if let sel = selectedID, !records.contains(where: { $0.id == sel }) {
+            selectedID = nil
+        }
+        // 首次出现记录时默认选中第一条
+        if !hasAutoSelected, selectedID == nil, let first = records.first {
+            selectedID = first.id
+            hasAutoSelected = true
+        }
+    }
+
+    private var needsRefresh = false
+
+    private func tick() {
+        // 空闲静默优化：无活动下载且无新变化时直接返回（零开销），
+        // 避免每 0.5 秒给 UI 赋值触发无谓的重绘
+        let hasActive = records.contains { $0.isActive }
+        guard hasActive || needsRefresh else { return }
+        needsRefresh = false
+
+        refresh()
+
+        guard hasActive else {
+            // 无活动下载：清空速度缓存
+            lastSnapshot.removeAll()
+            speedEMA.removeAll()
+            speeds = [:]
+            return
+        }
+
+        let now = Date()
+        var newSpeeds: [UUID: Double] = [:]
+        for rec in records {
+            guard rec.status == .downloading || rec.status == .connecting else { continue }
+            let prev = lastSnapshot[rec.id]
+            if let prev {
+                let dt = now.timeIntervalSince(prev.date)
+                if dt > 0.05 {
+                    let inst = Double(rec.downloadedSize - prev.bytes) / dt
+                    let ema = speedEMA[rec.id] ?? inst
+                    let smoothed = ema * 0.6 + inst * 0.4
+                    speedEMA[rec.id] = smoothed
+                    newSpeeds[rec.id] = max(0, smoothed)
+                }
+            }
+            lastSnapshot[rec.id] = (rec.downloadedSize, now)
+        }
+        speeds = newSpeeds
+        // 清理不再活跃的记录
+        let activeIDs = Set(records.filter { $0.status == .downloading || $0.status == .connecting }.map { $0.id })
+        lastSnapshot = lastSnapshot.filter { activeIDs.contains($0.key) }
+        speedEMA = speedEMA.filter { activeIDs.contains($0.key) }
+    }
+
+    var totalSpeed: Double {
+        speeds.values.reduce(0, +)
+    }
+
+    var activeCount: Int {
+        records.filter { $0.isActive }.count
+    }
+
+    // MARK: - 操作
+
+    func add(urlString: String, filename: String?, directory: String?) {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed), url.scheme != nil else { return }
+        let req = NewDownloadRequest(url: trimmed,
+                                     filename: filename?.isEmpty == false ? filename : nil,
+                                     directory: directory?.isEmpty == false ? directory : nil)
+        manager.add(req)
+    }
+
+    func pause(_ id: UUID) { manager.pause(id) }
+    func resume(_ id: UUID) { manager.resume(id) }
+    func cancel(_ id: UUID, deleteFile: Bool = false) { manager.cancel(id, deleteFile: deleteFile) }
+    func retry(_ id: UUID) { manager.retry(id) }
+    func rename(_ id: UUID, to newName: String) { manager.rename(id, to: newName) }
+    func pauseAll() { manager.pauseAll() }
+    func resumeAll() { manager.resumeAll() }
+    func removeCompleted() { manager.removeCompleted() }
+
+    func revealInFinder(_ rec: DownloadRecord) {
+        let path: String
+        if let finalPath = rec.finalPath, FileManager.default.fileExists(atPath: finalPath) {
+            path = finalPath
+        } else {
+            path = rec.directory
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    /// 双击打开：已完成直接打开文件，未完成打开所在目录
+    func openFile(_ rec: DownloadRecord) {
+        if rec.status == .completed,
+           let finalPath = rec.finalPath,
+           FileManager.default.fileExists(atPath: finalPath) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: finalPath))
+        } else {
+            revealInFinder(rec)
+        }
+    }
+
+    func openDownloadFolder() {
+        let dir = SettingsStore.shared.settings.downloadDirectory
+        NSWorkspace.shared.open(URL(fileURLWithPath: dir))
+    }
+
+    // MARK: - 通知
+
+    private func notifyCompleted(_ rec: DownloadRecord) {
+        guard SettingsStore.shared.settings.notifyOnComplete else { return }
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        let content = UNMutableNotificationContent()
+        content.title = "下载完成"
+        content.body = rec.filename
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.5, repeats: false)
+        center.add(UNNotificationRequest(identifier: rec.id.uuidString, content: content, trigger: trigger))
+    }
+
+    // MARK: - 设置变更
+
+    func applySettings() {
+        let s = SettingsStore.shared.settings
+        manager.updateSettings(s)
+        if server?.port != s.serverPort || server == nil {
+            startServer()
+        }
+    }
+}
+
+// MARK: - 格式化工具
+
+enum Format {
+    static func bytes(_ b: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: b, countStyle: .file)
+    }
+
+    static func speed(_ bps: Double) -> String {
+        let b = Int64(bps)
+        if b <= 0 { return "0 B/s" }
+        return ByteCountFormatter.string(fromByteCount: b, countStyle: .file) + "/s"
+    }
+
+    static func eta(remaining: Int64, speed: Double) -> String {
+        guard speed > 0, remaining > 0 else { return "—" }
+        let secs = Int(Double(remaining) / speed)
+        if secs < 60 { return "\(secs)秒" }
+        if secs < 3600 { return "\(secs / 60)分\(secs % 60)秒" }
+        return "\(secs / 3600)时\((secs % 3600) / 60)分"
+    }
+
+    static func date(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f.string(from: d)
+    }
+
+    static func statusText(_ rec: DownloadRecord, speed: Double?) -> String {
+        switch rec.status {
+        case .queued: return "排队中"
+        case .connecting: return "连接中…"
+        case .downloading:
+            if let hls = rec.hlsInfo, hls.total > 0 {
+                return "视频分片 \(hls.done)/\(hls.total) · \(Format.speed(speed ?? 0))"
+            }
+            if rec.totalSize > 0 {
+                let pct = String(format: "%.1f%%", rec.progress * 100)
+                if let s = speed, s > 0 {
+                    return "\(pct) · \(Format.speed(s)) · 剩余\(Format.eta(remaining: rec.totalSize - rec.downloadedSize, speed: s))"
+                }
+                return pct
+            }
+            return "下载中 · \(Format.speed(speed ?? 0))"
+        case .paused: return "已暂停"
+        case .completed:
+            let size = rec.totalSize > 0 ? rec.totalSize : rec.downloadedSize
+            return "已完成 · \(Format.bytes(size))"
+        case .error: return "出错：\(rec.errorMessage ?? "未知错误")"
+        case .cancelled: return "已取消"
+        }
+    }
+
+    static func fileIcon(_ rec: DownloadRecord) -> String {
+        let ext = (rec.filename as NSString).pathExtension.lowercased()
+        switch ext {
+        case "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "dmg", "pkg", "iso", "apk", "exe", "msi": return "doc.zipper"
+        case "mp4", "mkv", "avi", "mov", "flv", "webm", "ts", "m4v", "mpg", "mpeg": return "film"
+        case "mp3", "wav", "flac", "aac", "ogg", "m4a", "wma": return "music.note"
+        case "pdf": return "doc.richtext"
+        case "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "heic": return "photo"
+        case "txt", "md", "log", "srt", "vtt": return "doc.plaintext"
+        case "xls", "xlsx", "csv", "numbers": return "tablecells"
+        case "doc", "docx", "pages": return "doc.text"
+        case "ppt", "pptx", "key": return "chart.bar"
+        case "html", "htm", "css", "js", "json", "xml": return "chevron.left.forwardslash.chevron.right"
+        default: return "arrow.down.doc"
+        }
+    }
+}

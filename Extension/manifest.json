@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "速下 - 浏览器下载接管",
+  "version": "1.0.0",
+  "description": "将浏览器下载交给「速下」下载管理器（多线程加速、断点续传）",
+  "permissions": ["downloads", "storage", "contextMenus", "notifications", "webRequest"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*", "<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "速下下载管理器"
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

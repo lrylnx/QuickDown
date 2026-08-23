@@ -1,0 +1,20 @@
+# 构建产物
+.build/
+.swiftpm/
+
+# 打包输出
+dist/
+
+# macOS
+.DS_Store
+
+# 生成的资源（可重新生成）
+Resources/AppIcon.icns
+Resources/AppIcon.iconset/
+Resources/BrowserExtension.crx
+
+# 扩展签名私钥（公开仓库不提交，缺失时 make_crx.sh 会自动生成）
+Scripts/crx/key.pem
+
+# 本地测试
+*.log

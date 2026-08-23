@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>速下</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <img src="icons/icon48.png" alt="" width="28" height="28">
+    <div>
+      <div class="title">速下下载管理器</div>
+      <div id="status" class="status">检测中…</div>
+    </div>
+  </div>
+
+  <label class="switch-row">
+    <span>接管浏览器下载</span>
+    <input type="checkbox" id="captureToggle">
+    <span class="switch"></span>
+  </label>
+
+  <div class="mode-row">
+    <span>接管方式</span>
+    <select id="modeSelect">
+      <option value="auto">自动接管</option>
+      <option value="ask">每次询问</option>
+      <option value="off">关闭</option>
+    </select>
+  </div>
+
+  <div class="buttons">
+    <button id="openApp">打开速下</button>
+    <button id="openOptions" class="ghost">选项</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
