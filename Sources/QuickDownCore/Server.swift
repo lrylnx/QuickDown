@@ -2,6 +2,11 @@ import Foundation
 import AppKit
 import CryptoKit
 
+/// 请求唤起速下主窗口（浏览器接管下载时触发）
+public extension Notification.Name {
+    static let quickdownShowMainWindow = Notification.Name("quickdown.showMainWindow")
+}
+
 // MARK: - 本地 HTTP / WebSocket 服务器（基于 POSIX socket，供浏览器扩展调用）
 
 public final class LocalServer: @unchecked Sendable {
@@ -185,6 +190,8 @@ public final class LocalServer: @unchecked Sendable {
             let isSelf = frontmost == Bundle.main.bundleIdentifier
             guard !isSelf else { return }
             NSApp.activate(ignoringOtherApps: true)
+            // 通知 App 侧：无论主窗口是否已关闭都用 SwiftUI openWindow 恢复并置前
+            NotificationCenter.default.post(name: .quickdownShowMainWindow, object: nil)
             NSApp.windows.first { $0.isVisible || $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
         }
     }

@@ -66,7 +66,17 @@ struct MainView: View {
                 model.cancel(id)
             }
         }
+        // 初始化菜单栏状态项（左键打开主界面 / 右键菜单），并捕获 openWindow 能力
+        .onAppear {
+            StatusItemController.shared.setup(model: model)
+            let action = openWindowEnv
+            StatusItemController.shared.setOpenWindow {
+                action(id: "main")
+            }
+        }
     }
+
+    @Environment(\.openWindow) private var openWindowEnv
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {

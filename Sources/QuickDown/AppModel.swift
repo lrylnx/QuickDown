@@ -32,6 +32,10 @@ final class AppModel: ObservableObject {
         manager.onCompleted = { [weak self] rec in
             Task { @MainActor in self?.notifyCompleted(rec) }
         }
+        // 浏览器接管下载时，唤起主窗口（扩展端 /add 成功触发）
+        NotificationCenter.default.addObserver(forName: .quickdownShowMainWindow, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.showMainWindow() }
+        }
         startServer()
         refresh()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -39,6 +43,11 @@ final class AppModel: ObservableObject {
         }
         RunLoop.main.add(t, forMode: .common)
         ticker = t
+    }
+
+    /// 显示主窗口（菜单栏左键 / 接管下载 / 通知触发）
+    func showMainWindow() {
+        StatusItemController.shared.showMainWindow()
     }
 
     // MARK: - 服务器
@@ -61,9 +70,10 @@ final class AppModel: ObservableObject {
 
     func refresh() {
         records = manager.snapshot()
-        // 仅当选中项被删除时清空；不自动重新选中（否则点击空白处取消选择后会被定时器强行拉回，造成闪烁）
+        // 选中项被删除时：自动选中列表第一条（支持连续删除）。
+        // 注意：用户主动点击空白处取消选择（selectedID 为 nil）不会触发此处，避免闪烁。
         if let sel = selectedID, !records.contains(where: { $0.id == sel }) {
-            selectedID = nil
+            selectedID = records.first?.id
         }
         // 首次出现记录时默认选中第一条
         if !hasAutoSelected, selectedID == nil, let first = records.first {
@@ -84,10 +94,11 @@ final class AppModel: ObservableObject {
         refresh()
 
         guard hasActive else {
-            // 无活动下载：清空速度缓存
+            // 无活动下载：清空速度缓存，菜单栏只显示图标
             lastSnapshot.removeAll()
             speedEMA.removeAll()
             speeds = [:]
+            StatusItemController.shared.updateSpeed("")
             return
         }
 
@@ -113,6 +124,9 @@ final class AppModel: ObservableObject {
         let activeIDs = Set(records.filter { $0.status == .downloading || $0.status == .connecting }.map { $0.id })
         lastSnapshot = lastSnapshot.filter { activeIDs.contains($0.key) }
         speedEMA = speedEMA.filter { activeIDs.contains($0.key) }
+        // 菜单栏实时速度显示
+        let total = speeds.values.reduce(0, +)
+        StatusItemController.shared.updateSpeed(total > 0 ? Format.speed(total) : "")
     }
 
     var totalSpeed: Double {
