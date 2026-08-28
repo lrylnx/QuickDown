@@ -20,59 +20,81 @@ func writePNG(_ img: CGImage, to url: URL) {
     CGImageDestinationFinalize(dest)
 }
 
-/// 绘制：深蓝靛渐变圆角底 + 高光 + 白色圆润向下箭头 + 落地线
+/// 绘制速下 App 图标（1024 画布等比缩放）：
+/// 蓝靛紫三段渐变圆角底 + 顶部玻璃高光 + 底部暗角，
+/// 白色「下载」字形（圆头箭头 + 接纳托盘），字形带柔和投影。
 func drawDownloadIcon(size: Int) -> CGImage {
     let ctx = makeContext(size)
     let s = CGFloat(size)
     ctx.clear(CGRect(x: 0, y: 0, width: s, height: s))
 
-    // 圆角背景
-    let inset = s * 0.06
+    // ---- 圆角背景 ----
+    let inset = s * 0.045
     let rect = CGRect(x: inset, y: inset, width: s - inset * 2, height: s - inset * 2)
-    let path = CGPath(roundedRect: rect, cornerWidth: s * 0.22, cornerHeight: s * 0.22, transform: nil)
+    let path = CGPath(roundedRect: rect, cornerWidth: s * 0.225, cornerHeight: s * 0.225, transform: nil)
     ctx.saveGState()
     ctx.addPath(path)
     ctx.clip()
 
-    // 背景渐变（深蓝 -> 靛紫，对角）
-    let colors = [
-        CGColor(srgbRed: 0.20, green: 0.42, blue: 0.98, alpha: 1),   // 亮蓝
-        CGColor(srgbRed: 0.55, green: 0.36, blue: 0.95, alpha: 1),   // 靛紫
+    // 背景渐变：亮蓝 -> 靛 -> 紫（对角三段，层次比双色更饱满）
+    let bgColors = [
+        CGColor(srgbRed: 0.16, green: 0.50, blue: 1.00, alpha: 1),
+        CGColor(srgbRed: 0.38, green: 0.36, blue: 0.98, alpha: 1),
+        CGColor(srgbRed: 0.64, green: 0.34, blue: 0.95, alpha: 1),
     ] as CFArray
-    let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])!
-    ctx.drawLinearGradient(grad,
+    let bg = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: bgColors, locations: [0, 0.55, 1])!
+    ctx.drawLinearGradient(bg,
                            start: CGPoint(x: rect.minX, y: rect.maxY),
                            end: CGPoint(x: rect.maxX, y: rect.minY),
                            options: [])
 
-    // 顶部高光（左上柔和光晕）
-    let hlColors = [
-        CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.32),
-        CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.0),
-    ] as CFArray
-    let hl = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hlColors, locations: [0, 1])!
-    let hlCenter = CGPoint(x: rect.minX + rect.width * 0.28, y: rect.maxY - rect.height * 0.25)
+    // 顶部玻璃高光（左上径向白光）
+    let hl = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [
+        CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.34),
+        CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0),
+    ] as CFArray, locations: [0, 1])!
+    let hlCenter = CGPoint(x: rect.minX + rect.width * 0.30, y: rect.maxY - rect.height * 0.22)
     ctx.drawRadialGradient(hl,
                            startCenter: hlCenter, startRadius: 0,
-                           endCenter: hlCenter, endRadius: rect.width * 0.75,
+                           endCenter: hlCenter, endRadius: rect.width * 0.85,
                            options: [])
 
-    // 白色圆润向下箭头（round cap/join 描边绘制，整体圆润精致）
-    // 注意：CGContext 坐标原点在左下、y 向上，因此"向下"= y 递减
+    // 底部暗角（收拢视觉重心，增加立体感）
+    let dk = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [
+        CGColor(srgbRed: 0.05, green: 0.03, blue: 0.18, alpha: 0.22),
+        CGColor(srgbRed: 0.05, green: 0.03, blue: 0.18, alpha: 0),
+    ] as CFArray, locations: [0, 1])!
+    let dkCenter = CGPoint(x: rect.midX, y: rect.minY)
+    ctx.drawRadialGradient(dk,
+                           startCenter: dkCenter, startRadius: 0,
+                           endCenter: dkCenter, endRadius: rect.height * 0.72,
+                           options: [])
+
+    // 内侧玻璃描边（1px 级别的细亮边，大图下呈现质感）
+    ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.10))
+    ctx.setLineWidth(max(1, s * 0.006))
+    ctx.addPath(path)
+    ctx.strokePath()
+
+    // ---- 白色「下载」字形：箭头 + 托盘 ----
+    // 坐标系原点在左下、y 向上；字形占画面中部约 52%，托盘独立于底部，构图留白舒展
     let cx = s * 0.5
-    let shaftTop = s * 0.74   // 杆顶部（上方）
-    let joint = s * 0.50      // 杆底部 / 箭头交汇点（中部）
-    let tipY = s * 0.26       // 箭头尖端（下方）
-    let half = s * 0.27
+    let shaftTop = s * 0.735   // 杆顶
+    let joint     = s * 0.475  // 杆底/翼线交汇
+    let tipY      = s * 0.295  // 箭头尖端
+    let half      = s * 0.185  // 翼线半宽
+
     ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
     ctx.setLineCap(.round)
     ctx.setLineJoin(.round)
-    ctx.setLineWidth(s * 0.165)
+    ctx.setLineWidth(s * 0.115)
+    // 字形柔和投影（视觉上落在背景上）
+    ctx.setShadow(offset: CGSize(width: 0, height: -s * 0.014), blur: s * 0.030,
+                  color: CGColor(srgbRed: 0.08, green: 0.04, blue: 0.30, alpha: 0.30))
 
     let arrow = CGMutablePath()
     arrow.move(to: CGPoint(x: cx, y: shaftTop))
     arrow.addLine(to: CGPoint(x: cx, y: joint))
-    // 两条翼线从杆底两侧汇聚到下方尖端，构成标准的向下箭头（⌄）
     arrow.move(to: CGPoint(x: cx - half, y: joint))
     arrow.addLine(to: CGPoint(x: cx, y: tipY))
     arrow.move(to: CGPoint(x: cx + half, y: joint))
@@ -80,15 +102,13 @@ func drawDownloadIcon(size: Int) -> CGImage {
     ctx.addPath(arrow)
     ctx.strokePath()
 
-    // 落地线（箭头下方的收纳托盘线，半透明白）
-    ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.85))
-    ctx.setLineWidth(s * 0.055)
-    ctx.setLineCap(.round)
-    let line = CGMutablePath()
-    let lineY = s * 0.13
-    line.move(to: CGPoint(x: cx - s * 0.23, y: lineY))
-    line.addLine(to: CGPoint(x: cx + s * 0.23, y: lineY))
-    ctx.addPath(line)
+    // 托盘：短圆头粗线，与箭头同宽视觉，稳定收底
+    let trayY = s * 0.155
+    let trayHalf = s * 0.21
+    let tray = CGMutablePath()
+    tray.move(to: CGPoint(x: cx - trayHalf, y: trayY))
+    tray.addLine(to: CGPoint(x: cx + trayHalf, y: trayY))
+    ctx.addPath(tray)
     ctx.strokePath()
 
     ctx.restoreGState()

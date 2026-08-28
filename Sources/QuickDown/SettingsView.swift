@@ -260,7 +260,7 @@ struct ExtensionSettingsView: View {
             Toggle("接管下载后先确认再下载", isOn: $settings.confirmOnCapture)
                 .help("接管后弹出确认窗口：可重命名文件、选择保存位置，点击「开始下载」或「取消」")
 
-            Divider()
+            QDDivider()
 
             if browsers.isEmpty {
                 Text("未检测到 Chrome / Edge / Thorium / Brave 等浏览器（请先安装）")

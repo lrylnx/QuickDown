@@ -24,6 +24,22 @@ enum QDTheme {
     }
 }
 
+// MARK: - 分割线
+//
+// 系统 Divider 在深色模式下过淡（几乎不可见），统一用自定义分割线：
+// 主线条 + 极淡高光，深浅色都清晰但不抢眼。
+
+struct QDDivider: View {
+    /// true = 垂直分割线（如侧栏与内容区之间）
+    var vertical = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.16))
+            .frame(width: vertical ? 1 : nil, height: vertical ? nil : 1)
+    }
+}
+
 // MARK: - 分类配色
 
 extension DownloadCategory {
@@ -128,8 +144,9 @@ struct QDCard: ViewModifier {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
             )
+            .shadow(color: Color.black.opacity(0.10), radius: 5, y: 2)
     }
 }
 
@@ -155,7 +172,39 @@ struct QDPrimaryButtonStyle: ButtonStyle {
                     .fill(QDTheme.accentGradient)
                     .opacity(isEnabled ? 1 : 0.4)
             )
+            .shadow(color: QDTheme.accent.opacity(isEnabled ? 0.30 : 0), radius: 6, y: 2)
             .opacity(configuration.isPressed ? 0.9 : 1)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+// MARK: - 次级按钮（取消 / 打开文件夹 等）
+//
+// 系统 .bordered 在深色模式下是一块几乎与背景融为一体的暗灰矩形，
+// 与品牌胶囊主按钮并列时风格割裂。统一为同高度胶囊：柔和底色 + 描边 + 悬停反馈。
+
+struct QDSecondaryButtonStyle: ButtonStyle {
+    /// 危险操作（如删除）传入红色，普通为 nil
+    var tint: Color? = nil
+    @Environment(\.isEnabled) private var isEnabled
+
+    private var base: Color { tint ?? Color.primary }
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(base.opacity(isEnabled ? 0.85 : 0.35))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .background(
+                Capsule()
+                    .fill(base.opacity(configuration.isPressed ? 0.14 : 0.07))
+            )
+            .overlay(
+                Capsule().strokeBorder(base.opacity(0.16), lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.92 : 1)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
     }

@@ -215,7 +215,7 @@ async function sendToApp(item, portOverride) {
 // 过滤（纯同步，读内存 settings）
 // ============================================================================
 
-const MEDIA_RE = /\.(mp4|mkv|avi|mov|flv|webm|ts|m4v|mpg|mpeg|mp3|wav|flac|aac|ogg|m4a|wma|zip|rar|7z|tar|gz|bz2|xz|dmg|pkg|iso|apk|exe|msi|pdf|doc|docx|xls|xlsx|ppt|pptx)(\?|#|$)/i;
+const MEDIA_RE = /\.(mp4|mkv|avi|mov|flv|webm|ts|m4v|mpg|mpeg|mp3|wav|flac|aac|ogg|m4a|wma|zip|rar|7z|tar|gz|bz2|xz|dmg|pkg|iso|apk|exe|msi|pdf|doc|docx|xls|xlsx|ppt|pptx|cmd|bat|dll|bin|dat|crx|txt|csv|json|xml|epub|log|torrent|psd|ttf|otf|woff2?)(\?|#|$)/i;
 const MEDIA_MIME = /^(video\/|audio\/)/;
 
 function isExcluded(url, excludedText) {
@@ -334,6 +334,10 @@ async function takeOver(downloadItem, opts = {}) {
   } catch (e) {}
 
   if (opts.eraseFromHistory) {
+    // 先删磁盘文件再抹历史：若 cancel 输给了极小文件（浏览器已完成），
+    // removeFile 在这里直接清掉文件 —— 不能依赖 onChanged 里的 removeFile，
+    // 因为下面的 erase 抹掉条目后，该下载的后续事件可能不再派发，文件会残留在磁盘
+    try { await chrome.downloads.removeFile(downloadItem.id); } catch (e) {}
     try { await chrome.downloads.erase({ id: downloadItem.id }); } catch (e) {}
   }
 
@@ -536,6 +540,9 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== "qd-keepalive") return;
   keepAliveTick();
+  // 补扫进行中的下载：SW 曾被杀再唤醒的窗口期内 onCreated 可能已迟到/丢失，
+  // 这里把仍在浏览器里的下载补接管（markCaptured 按 id 去重，已接管的直接跳过）
+  sweepInProgress();
   const port = await ensurePort();
   if (port) {
     const sent = await flushQueue();

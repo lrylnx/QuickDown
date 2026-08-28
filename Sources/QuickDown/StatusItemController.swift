@@ -14,6 +14,7 @@ final class StatusItemController: NSObject {
     private weak var model: AppModel?
     private var openWindowAction: (() -> Void)?
     private var openConfirmWindowAction: (() -> Void)?
+    private var accessoryRestoreObserver: (any NSObjectProtocol)?
 
     func setup(model: AppModel) {
         self.model = model
@@ -80,7 +81,8 @@ final class StatusItemController: NSObject {
         return img
     }
 
-    /// 绘制菜单栏图标（黑白版）：纯下箭头模板图，颜色交给系统自动适配
+    /// 绘制菜单栏图标（黑白版）：下载箭头 + 托盘双元素，撑满 18pt 画布，
+    /// 模板图只取 alpha、颜色由系统自动适配深浅菜单栏
     private func makeMonoStatusImage() -> NSImage {
         let d: CGFloat = 18
         let img = NSImage(size: NSSize(width: d, height: d))
@@ -89,16 +91,20 @@ final class StatusItemController: NSObject {
 
         NSColor.black.setStroke()   // 模板图只取 alpha，实际颜色由系统决定
         let bp = NSBezierPath()
-        bp.lineWidth = 2.4
+        bp.lineWidth = 2.6
         bp.lineCapStyle = .round
         bp.lineJoinStyle = .round
         let cx = d / 2
-        bp.move(to: NSPoint(x: cx, y: 13.2))
-        bp.line(to: NSPoint(x: cx, y: 8.6))
-        bp.move(to: NSPoint(x: cx - 3.6, y: 8.6))
-        bp.line(to: NSPoint(x: cx, y: 4.2))
-        bp.move(to: NSPoint(x: cx + 3.6, y: 8.6))
-        bp.line(to: NSPoint(x: cx, y: 4.2))
+        // 箭头：杆从顶部到中部，两翼汇聚到下尖端
+        bp.move(to: NSPoint(x: cx, y: 15.4))
+        bp.line(to: NSPoint(x: cx, y: 9.2))
+        bp.move(to: NSPoint(x: cx - 4.3, y: 9.2))
+        bp.line(to: NSPoint(x: cx, y: 4.9))
+        bp.move(to: NSPoint(x: cx + 4.3, y: 9.2))
+        bp.line(to: NSPoint(x: cx, y: 4.9))
+        // 托盘：底部收纳线，与彩色版同构
+        bp.move(to: NSPoint(x: cx - 5.2, y: 2.4))
+        bp.line(to: NSPoint(x: cx + 5.2, y: 2.4))
         bp.stroke()
 
         return img
@@ -121,27 +127,15 @@ final class StatusItemController: NSObject {
             action()
         } else {
             // 主窗口从未出现过（openWindow 尚未捕获）：先唤起主窗口触发捕获，再重试
-            openWindowAction?()
+            showMainWindow()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.popConfirmWindowToFront()
+                self?.popWindowToFront(titled: "确认下载")
             }
             return
         }
         // openWindow 是异步创建窗口，稍候把它顶到所有应用前方
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            self?.popConfirmWindowToFront()
-        }
-    }
-
-    /// 把确认窗口顶到最前。菜单栏应用（LSUIElement）在后台时
-    /// activate 在新版 macOS 抢不到焦点，需短暂置顶再恢复正常层级
-    private func popConfirmWindowToFront() {
-        NSApp.activate(ignoringOtherApps: true)
-        guard let win = NSApp.windows.first(where: { $0.title == "确认下载" }) else { return }
-        win.makeKeyAndOrderFront(nil)
-        win.level = .floating
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            win.level = .normal
+            self?.popWindowToFront(titled: "确认下载")
         }
     }
 
@@ -165,6 +159,67 @@ final class StatusItemController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         // SwiftUI 的 Window 场景保证单窗口：窗口已存在则带到前台，已关闭则重建
         openWindowAction?()
+        // activate 在新版 macOS 是协作式的，速下在后台时可能抢不到焦点，
+        // 窗口会开在当前应用后面 —— 统一用「短暂置顶」确保出现在最前
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.popWindowToFront(titled: "速下下载管理器")
+        }
+    }
+
+    /// 把指定标题的窗口顶到所有应用前方（主窗口/确认窗口/设置窗口共用）。
+    /// 新版 macOS 的协作式激活会「有概率」拒绝后台菜单栏应用（LSUIElement）的
+    /// 焦点请求，导致窗口开在当前应用后面 —— 先临时切成常规应用确保拿到前台。
+    /// 注意：不能定时恢复 accessory 策略（那会让应用立刻失去焦点、窗口重新被
+    /// 压到后面，表现为「弹出 1 秒又消失」），改为等用户主动切走时再恢复。
+    private func popWindowToFront(titled title: String) {
+        let wasAccessory = NSApp.activationPolicy() == .accessory
+        if wasAccessory {
+            NSApp.setActivationPolicy(.regular)
+            if accessoryRestoreObserver == nil {
+                accessoryRestoreObserver = NotificationCenter.default.addObserver(
+                    forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+                ) { [weak self] _ in
+                    guard let self else { return }
+                    NSApp.setActivationPolicy(.accessory)
+                    if let o = self.accessoryRestoreObserver {
+                        NotificationCenter.default.removeObserver(o)
+                        self.accessoryRestoreObserver = nil
+                    }
+                }
+            }
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        guard let win = NSApp.windows.first(where: { $0.title == title }) else { return }
+        win.makeKeyAndOrderFront(nil)
+        win.level = .floating
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            win.level = .normal
+        }
+    }
+
+    /// 打开设置：触发主菜单「设置…」（SwiftUI Settings 场景注册项），并把设置窗口带到前台
+    func openSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let mainMenu = NSApp.mainMenu, performSettingsItem(in: mainMenu.items) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.popWindowToFront(titled: "设置")
+            }
+            return
+        }
+        NSApp.sendAction(NSSelectorFromString("showSettingsWindow:"), to: nil, from: nil)
+    }
+
+    private func performSettingsItem(in items: [NSMenuItem]) -> Bool {
+        for item in items {
+            if item.title.contains("设置"), let action = item.action {
+                NSApp.sendAction(action, to: item.target, from: item)
+                return true
+            }
+            if let submenu = item.submenu, performSettingsItem(in: submenu.items) {
+                return true
+            }
+        }
+        return false
     }
 
     private func buildMenu() -> NSMenu {
@@ -175,12 +230,15 @@ final class StatusItemController: NSObject {
         menu.addItem(withTitle: "全部开始", action: #selector(menuResumeAll), keyEquivalent: "")
         menu.addItem(withTitle: "全部暂停", action: #selector(menuPauseAll), keyEquivalent: "")
         menu.addItem(.separator())
+        menu.addItem(withTitle: "设置…", action: #selector(menuOpenSettings), keyEquivalent: ",")
         menu.addItem(withTitle: "打开下载目录", action: #selector(menuOpenFolder), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出速下", action: #selector(menuQuit), keyEquivalent: "q")
         for item in menu.items { item.target = self }
         return menu
     }
+
+    @objc private func menuOpenSettings() { openSettings() }
 
     @objc private func menuShowMain() { showMainWindow() }
 

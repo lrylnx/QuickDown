@@ -39,11 +39,13 @@ private struct CaptureConfirmContent: View {
             directoryField
             landingHint
             queueHint
-            Divider()
+            QDDivider()
             buttons
         }
         .padding(22)
-        .frame(width: 500)
+        // 固定宽高：Window 场景的 .contentSize 弹性会把「首次布局时的理想尺寸」锁成窗口
+        // 尺寸，而提示行显隐/换行会让理想尺寸漂移（表现为弹窗时大时小），故钉死尺寸
+        .frame(width: 500, height: 340)
         .onAppear {
             filename = rec.filename
             directory = rec.directory
@@ -106,7 +108,7 @@ private struct CaptureConfirmContent: View {
                 } label: {
                     Image(systemName: "folder")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(QDSecondaryButtonStyle())
                 .help("选择保存文件夹")
             }
         }
@@ -120,6 +122,8 @@ private struct CaptureConfirmContent: View {
                 Text("将保存到分类文件夹：\(landing)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
         }
     }
@@ -139,6 +143,7 @@ private struct CaptureConfirmContent: View {
             Text("第 1 个，共 \(model.confirmQueue.count) 个下载等待确认")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
     }
 
@@ -150,7 +155,7 @@ private struct CaptureConfirmContent: View {
             Button("取消") {
                 model.cancelCapture(id: rec.id)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(QDSecondaryButtonStyle())
             .keyboardShortcut(.cancelAction)
             Button("开始下载") {
                 model.confirmCapture(id: rec.id, filename: filename, directory: directory)

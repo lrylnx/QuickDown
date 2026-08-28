@@ -245,6 +245,13 @@ final class AppModel: ObservableObject {
 
     private func notifyCompleted(_ rec: DownloadRecord) {
         guard SettingsStore.shared.settings.notifyOnComplete else { return }
+        // 右下角 toast：文件名 + 打开文件/打开文件夹（非激活面板，不抢焦点）
+        CompletionToast.shared.show(filename: rec.filename,
+                                    filePath: rec.finalPath,
+                                    directory: rec.directory)
+        // UNUserNotificationCenter 在无 .app 包体的裸进程中会直接抛异常（开发调试场景），
+        // 正常安装运行（有 bundle id）才发通知
+        guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
         let content = UNMutableNotificationContent()

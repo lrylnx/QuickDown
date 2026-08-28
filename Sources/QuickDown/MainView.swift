@@ -5,14 +5,21 @@ import QuickDownCore
 
 struct MainView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.colorScheme) private var scheme
+
+    /// 内容区背景：深色模式比侧栏更暗一档形成层次；
+    /// 浅色模式 underPageBackground 是中灰、过重，改用与侧栏一致的窗口底色
+    private var detailBackground: Color {
+        scheme == .dark ? Color(nsColor: .underPageBackgroundColor)
+                        : Color(nsColor: .windowBackgroundColor)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
             sidebar
 
-            Rectangle()
-                .fill(Color.primary.opacity(0.07))
-                .frame(width: 1)
+            // 侧栏与内容区分层：分割线 + 深色下内容区更暗，结构明确
+            QDDivider(vertical: true)
 
             // 右侧详情：内容在内部切换，面板本身保持稳定
             ZStack {
@@ -30,7 +37,7 @@ struct MainView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(detailBackground)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("速下下载管理器")
@@ -115,7 +122,7 @@ struct MainView: View {
             .disabled(model.selectedID == nil)
             .help("删除选中的下载记录（文件保留在下载目录）")
 
-            Divider()
+            QDDivider()
 
             Button {
                 model.showAddSheet = true
@@ -148,51 +155,36 @@ struct MainView: View {
         }
         ToolbarItem(placement: .automatic) {
             Button {
-                openSettings()
+                StatusItemController.shared.openSettings()
             } label: {
                 Label("设置", systemImage: "gearshape")
             }
         }
     }
 
-    private func openSettings() {
-        // 触发主菜单里的「设置…」菜单项（与 Cmd+, 相同路径，SwiftUI Settings 场景注册的菜单项必定可用）
-        if let mainMenu = NSApp.mainMenu {
-            if performSettingsItem(in: mainMenu.items) { return }
-        }
-        NSApp.sendAction(NSSelectorFromString("showSettingsWindow:"), to: nil, from: nil)
-    }
-
-    private func performSettingsItem(in items: [NSMenuItem]) -> Bool {
-        for item in items {
-            if item.title.contains("设置"), let action = item.action {
-                NSApp.sendAction(action, to: item.target, from: item)
-                return true
-            }
-            if let submenu = item.submenu, performSettingsItem(in: submenu.items) {
-                return true
-            }
-        }
-        return false
-    }
-
     @ViewBuilder
     private func rowMenu(_ rec: DownloadRecord) -> some View {
-        Button("暂停") { model.pause(rec.id) }
-            .disabled(!rec.isActive)
-        Button("继续") { model.resume(rec.id) }
-            .disabled(rec.status != .paused && rec.status != .error)
-        Button("重试") { model.retry(rec.id) }
-            .disabled(rec.status != .error && rec.status != .paused)
-        Button("重命名…") { promptRename(rec) }
-        Divider()
+        // 已完成任务没有暂停/继续/重试可言，不再展示灰色项，直接给最常用的文件操作
+        if rec.status != .completed {
+            Button("暂停") { model.pause(rec.id) }
+                .disabled(!rec.isActive)
+            Button("继续") { model.resume(rec.id) }
+                .disabled(rec.status != .paused && rec.status != .error)
+            Button("重试") { model.retry(rec.id) }
+                .disabled(rec.status != .error && rec.status != .paused)
+            QDDivider()
+        }
+        Button("打开文件") { model.openFile(rec) }
+            .disabled(rec.status != .completed)
         Button("打开文件夹") { model.revealInFinder(rec) }
             .disabled(rec.status != .completed)
+        Button("重命名…") { promptRename(rec) }
+        QDDivider()
         Button("复制链接") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(rec.url, forType: .string)
         }
-        Divider()
+        QDDivider()
         Button("删除记录") { model.cancel(rec.id) }
             .help("仅从列表移除，文件保留")
         Button("删除记录和文件", role: .destructive) { model.cancel(rec.id, deleteFile: true) }
@@ -277,18 +269,17 @@ struct CategoryTag: View {
 }
 
 // MARK: - 列表行点击识别器（AppKit 原生，单击/双击互不干扰）
-// 在原有单击/双击基础上补充鼠标悬停跟踪，用于行高亮反馈。
+// 悬停高亮不在这里做：tracking area 在窗口失焦/列表滚动时收不到 mouseExited，
+// 会导致多行同时卡在悬停色（残留），改用 SwiftUI 原生 .onHover（见 DownloadRow）。
 
 struct RowClickHandler: NSViewRepresentable {
     let onSelect: () -> Void
     let onDouble: () -> Void
-    var onHover: (Bool) -> Void = { _ in }
 
     func makeNSView(context: Context) -> RowClickNSView {
         let view = RowClickNSView()
         view.onSelect = onSelect
         view.onDouble = onDouble
-        view.onHover = onHover
         let single = NSClickGestureRecognizer(target: view, action: #selector(RowClickNSView.singleClicked(_:)))
         single.numberOfClicksRequired = 1
         single.delaysPrimaryMouseButtonEvents = false // 单击立即响应
@@ -303,29 +294,12 @@ struct RowClickHandler: NSViewRepresentable {
     func updateNSView(_ nsView: RowClickNSView, context: Context) {
         nsView.onSelect = onSelect
         nsView.onDouble = onDouble
-        nsView.onHover = onHover
     }
 }
 
 final class RowClickNSView: NSView {
     var onSelect: (() -> Void)?
     var onDouble: (() -> Void)?
-    var onHover: (Bool) -> Void = { _ in }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        let opts: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect]
-        addTrackingArea(NSTrackingArea(rect: .zero, options: opts, owner: self, userInfo: nil))
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        onHover(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        onHover(false)
-    }
 
     @objc func singleClicked(_ sender: NSClickGestureRecognizer) {
         onSelect?()
@@ -345,6 +319,7 @@ final class RowClickNSView: NSView {
 
 struct DownloadRow: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.controlActiveState) private var controlActiveState
     let rec: DownloadRecord
     @State private var hovering = false
     /// 进度条是否可见：下载/暂停/出错始终可见；完成项仅在“本次会话刚完成”时显示 1 秒后淡出，
@@ -399,8 +374,9 @@ struct DownloadRow: View {
         .contentShape(Rectangle())
         .overlay(RowClickHandler(
             onSelect: { model.selectedID = rec.id },
-            onDouble: { model.openFile(rec) },
-            onHover: { hovering = $0 }))
+            onDouble: { model.openFile(rec) }))
+        .onHover { hovering = $0 }
+        .onDisappear { hovering = false } // 滚动出屏/重建时清掉悬停态，避免颜色残留
         .onAppear {
             // 首次出现时若已是完成状态（如启动后、切换筛选），不显示绿色进度条
             if rec.status == .completed { showProgressBar = false }
@@ -445,8 +421,9 @@ struct DownloadRow: View {
     }
 
     private var backgroundColor: Color {
-        if isSelected { return Color.accentColor.opacity(0.12) }
-        if hovering { return Color.primary.opacity(0.045) }
+        if isSelected { return Color.accentColor.opacity(0.14) }
+        // 窗口非焦点时不显示悬停色：失焦瞬间收不到 mouseExited，会有整行残留
+        if hovering, controlActiveState == .active { return Color.primary.opacity(0.07) }
         return .clear
     }
 
@@ -478,7 +455,7 @@ struct DetailView: View {
                 } label: {
                     Label("打开文件夹", systemImage: "folder")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(QDSecondaryButtonStyle())
                 .controlSize(.large)
                 .disabled(rec.status != .completed)
             }
@@ -603,9 +580,8 @@ struct DetailView: View {
                 .buttonStyle(QDPrimaryButtonStyle())
         case .completed:
             Button { model.cancel(rec.id) } label: { Label("删除记录", systemImage: "trash") }
-                .buttonStyle(.bordered)
+                .buttonStyle(QDSecondaryButtonStyle(tint: .red))
                 .controlSize(.large)
-                .tint(.red)
                 .help("仅从列表移除，文件保留在下载目录")
         case .cancelled:
             EmptyView()
@@ -649,7 +625,7 @@ struct StatusBarView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
         .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+        .overlay(alignment: .top) { QDDivider() }
     }
 }
 
@@ -710,16 +686,16 @@ struct AddURLSheet: View {
                     } label: {
                         Image(systemName: "folder")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(QDSecondaryButtonStyle())
                 }
             }
 
-            Divider()
+            QDDivider()
 
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(QDSecondaryButtonStyle())
                     .keyboardShortcut(.cancelAction)
                 Button("开始下载") {
                     model.add(urlString: url, filename: filename.isEmpty ? nil : filename,
