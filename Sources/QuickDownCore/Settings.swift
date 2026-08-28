@@ -15,6 +15,7 @@ public struct AppSettings: Codable, Sendable {
     public var confirmOnCapture: Bool  // 扩展接管下载后先弹确认窗口（可重命名/选位置）
     public var sortIntoCategories: Bool // 按中文分类保存到子文件夹
     public var menuBarIconStyle: String // "color" 品牌彩色 / "mono" 黑白跟随系统
+    public var appearance: String       // "auto" 跟随系统 / "light" 浅色 / "dark" 深色
 
     // 代理
     public var proxyEnabled: Bool
@@ -36,6 +37,7 @@ public struct AppSettings: Codable, Sendable {
         confirmOnCapture: Bool = true,
         sortIntoCategories: Bool = true,
         menuBarIconStyle: String = "color",
+        appearance: String = "auto",
         proxyEnabled: Bool = false,
         proxyHost: String = "127.0.0.1",
         proxyPort: Int = 7890,
@@ -54,6 +56,7 @@ public struct AppSettings: Codable, Sendable {
         self.confirmOnCapture = confirmOnCapture
         self.sortIntoCategories = sortIntoCategories
         self.menuBarIconStyle = menuBarIconStyle
+        self.appearance = appearance
         self.proxyEnabled = proxyEnabled
         self.proxyHost = proxyHost
         self.proxyPort = proxyPort
@@ -76,6 +79,7 @@ public struct AppSettings: Codable, Sendable {
         confirmOnCapture = try c.decodeIfPresent(Bool.self, forKey: .confirmOnCapture) ?? true
         sortIntoCategories = try c.decodeIfPresent(Bool.self, forKey: .sortIntoCategories) ?? true
         menuBarIconStyle = try c.decodeIfPresent(String.self, forKey: .menuBarIconStyle) ?? "color"
+        appearance = try c.decodeIfPresent(String.self, forKey: .appearance) ?? "auto"
         proxyEnabled = try c.decodeIfPresent(Bool.self, forKey: .proxyEnabled) ?? false
         proxyHost = try c.decodeIfPresent(String.self, forKey: .proxyHost) ?? "127.0.0.1"
         proxyPort = try c.decodeIfPresent(Int.self, forKey: .proxyPort) ?? 7890

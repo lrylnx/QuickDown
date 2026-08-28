@@ -21,11 +21,13 @@ struct MainView: View {
             // 侧栏与内容区分层：分割线 + 深色下内容区更暗，结构明确
             QDDivider(vertical: true)
 
-            // 右侧详情：内容在内部切换，面板本身保持稳定
+            // 右侧详情：内容在内部切换，面板本身保持稳定；切换时轻淡入，避免生硬跳变
             ZStack {
                 if let sel = model.selectedID,
                    let rec = model.records.first(where: { $0.id == sel }) {
                     DetailView(rec: rec)
+                        .id(sel)
+                        .transition(.opacity)
                 } else {
                     VStack(spacing: 14) {
                         Image(systemName: "arrow.down.circle")
@@ -34,10 +36,12 @@ struct MainView: View {
                         Text("选择一个下载任务查看详情")
                             .foregroundStyle(.secondary)
                     }
+                    .transition(.opacity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(detailBackground)
+            .animation(.easeInOut(duration: 0.16), value: model.selectedID)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("速下下载管理器")
@@ -371,6 +375,9 @@ struct DownloadRow: View {
                 .fill(backgroundColor)
                 .padding(.horizontal, 8)
         )
+        // 悬停/选中变色走 0.15s 渐变，替代瞬间跳变
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .animation(.easeOut(duration: 0.15), value: isSelected)
         .contentShape(Rectangle())
         .overlay(RowClickHandler(
             onSelect: { model.selectedID = rec.id },
@@ -479,7 +486,9 @@ struct DetailView: View {
                     .font(.system(size: 16, weight: .semibold))
                     .lineLimit(2)
                 HStack(spacing: 6) {
-                    StatusDot(color: statusColor, size: 8)
+                    // 下载中/连接中：状态点呼吸闪烁，传达「正在工作」
+                    StatusDot(color: statusColor, size: 8,
+                              pulsing: rec.status == .downloading || rec.status == .connecting)
                     Text(statusText)
                         .font(.caption)
                         .foregroundStyle(statusColor)

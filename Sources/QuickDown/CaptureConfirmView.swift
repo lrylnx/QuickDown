@@ -31,6 +31,7 @@ private struct CaptureConfirmContent: View {
 
     @State private var filename = ""
     @State private var directory = ""
+    @State private var appeared = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -46,9 +47,12 @@ private struct CaptureConfirmContent: View {
         // 固定宽高：Window 场景的 .contentSize 弹性会把「首次布局时的理想尺寸」锁成窗口
         // 尺寸，而提示行显隐/换行会让理想尺寸漂移（表现为弹窗时大时小），故钉死尺寸
         .frame(width: 500, height: 340)
+        .opacity(appeared ? 1 : 0)
+        .offset(y: appeared ? 0 : 10)
         .onAppear {
             filename = rec.filename
             directory = rec.directory
+            withAnimation(.easeOut(duration: 0.22)) { appeared = true }
         }
         .onChange(of: model.confirmQueue) { queue in
             if queue.isEmpty { dismiss() }

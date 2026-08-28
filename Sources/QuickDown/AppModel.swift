@@ -46,6 +46,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self.enqueueConfirm(id) }
         }
         startServer()
+        applyAppearance(SettingsStore.shared.settings.appearance) // 启动时恢复用户选择的外观
         refresh()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -271,6 +272,16 @@ final class AppModel: ObservableObject {
             startServer()
         }
         StatusItemController.shared.applyIconStyle()
+        applyAppearance(s.appearance)
+    }
+
+    /// 外观模式："auto" 跟随系统 / "light" 强制浅色 / "dark" 强制深色
+    private func applyAppearance(_ mode: String) {
+        switch mode {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark":  NSApp.appearance = NSAppearance(named: .darkAqua)
+        default:      NSApp.appearance = nil // 跟随系统
+        }
     }
 }
 

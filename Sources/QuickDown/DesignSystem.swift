@@ -101,11 +101,25 @@ struct QDCategoryIcon: View {
 struct StatusDot: View {
     let color: Color
     var size: CGFloat = 7
+    /// true = 呼吸闪烁（用于「下载中」等活跃状态，让界面有生命感）
+    var pulsing = false
+    @State private var dimmed = false
 
     var body: some View {
         Circle()
             .fill(color)
             .frame(width: size, height: size)
+            .opacity(dimmed ? 0.4 : 1)
+            .onAppear { restartPulse() }
+            .onChange(of: pulsing) { _ in restartPulse() }
+    }
+
+    private func restartPulse() {
+        dimmed = false
+        guard pulsing else { return }
+        withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+            dimmed = true
+        }
     }
 }
 
@@ -157,25 +171,48 @@ extension View {
 }
 
 // MARK: - 主操作按钮（胶囊 + 品牌渐变）
+//
+// 悬停：白色提亮 + 品牌色光晕扩大 + 轻微上浮；按下：回缩。
+// 悬停态做在 makeBody 返回的内层视图里（@State 挂在那里才能驱动动画）。
 
 struct QDPrimaryButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 7)
-            .background(
-                Capsule()
-                    .fill(QDTheme.accentGradient)
-                    .opacity(isEnabled ? 1 : 0.4)
-            )
-            .shadow(color: QDTheme.accent.opacity(isEnabled ? 0.30 : 0), radius: 6, y: 2)
-            .opacity(configuration.isPressed ? 0.9 : 1)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+        PrimaryBody(configuration: configuration)
+    }
+
+    private struct PrimaryBody: View {
+        let configuration: Configuration
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        private var active: Bool { isEnabled && !configuration.isPressed }
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule()
+                        .fill(QDTheme.accentGradient)
+                        .opacity(isEnabled ? 1 : 0.4)
+                        .overlay(Capsule().fill(Color.white.opacity(active && hovering ? 0.14 : 0)))
+                )
+                .shadow(color: QDTheme.accent.opacity(isEnabled ? (hovering ? 0.42 : 0.30) : 0),
+                        radius: active && hovering ? 10 : 6, y: 2)
+                .scaleEffect(configuration.isPressed ? 0.97 : (active && hovering ? 1.03 : 1))
+                .opacity(configuration.isPressed ? 0.92 : 1)
+                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hovering)
+                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+                .onHover { hover in
+                    hovering = hover
+                    if hover { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+                }
+                .onDisappear {
+                    if hovering { NSCursor.arrow.set(); hovering = false }
+                }
+        }
     }
 }
 
@@ -187,25 +224,44 @@ struct QDPrimaryButtonStyle: ButtonStyle {
 struct QDSecondaryButtonStyle: ButtonStyle {
     /// 危险操作（如删除）传入红色，普通为 nil
     var tint: Color? = nil
-    @Environment(\.isEnabled) private var isEnabled
-
-    private var base: Color { tint ?? Color.primary }
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(base.opacity(isEnabled ? 0.85 : 0.35))
-            .padding(.horizontal, 16)
-            .padding(.vertical, 7)
-            .background(
-                Capsule()
-                    .fill(base.opacity(configuration.isPressed ? 0.14 : 0.07))
-            )
-            .overlay(
-                Capsule().strokeBorder(base.opacity(0.16), lineWidth: 1)
-            )
-            .opacity(configuration.isPressed ? 0.92 : 1)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+        SecondaryBody(configuration: configuration, tint: tint)
+    }
+
+    private struct SecondaryBody: View {
+        let configuration: Configuration
+        var tint: Color?
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var hovering = false
+
+        private var base: Color { tint ?? Color.primary }
+        private var active: Bool { isEnabled && !configuration.isPressed }
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(base.opacity(isEnabled ? 0.85 : 0.35))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule().fill(base.opacity(
+                        configuration.isPressed ? 0.15 : (active && hovering ? 0.12 : 0.07)))
+                )
+                .overlay(
+                    Capsule().strokeBorder(base.opacity(active && hovering ? 0.30 : 0.16), lineWidth: 1)
+                )
+                .scaleEffect(configuration.isPressed ? 0.97 : 1)
+                .opacity(configuration.isPressed ? 0.92 : 1)
+                .animation(.easeOut(duration: 0.15), value: hovering)
+                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: configuration.isPressed)
+                .onHover { hover in
+                    hovering = hover
+                    if hover { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+                }
+                .onDisappear {
+                    if hovering { NSCursor.arrow.set(); hovering = false }
+                }
+        }
     }
 }

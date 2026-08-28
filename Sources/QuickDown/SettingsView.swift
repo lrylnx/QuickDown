@@ -20,7 +20,7 @@ struct SettingsView: View {
             AdvancedSettingsView(settings: $settings, loginItemStatus: $loginItemStatus, apply: apply)
                 .tabItem { Label("高级", systemImage: "slider.horizontal.3") }
         }
-        .frame(width: 520, height: 380)
+        .frame(width: 520, height: 440)
         .onAppear {
             refreshLoginStatus()
         }
@@ -55,6 +55,7 @@ struct SettingsView: View {
 // MARK: - 常规
 
 struct GeneralSettingsView: View {
+    @EnvironmentObject private var model: AppModel
     @Binding var settings: AppSettings
     @State private var showDirPicker = false
 
@@ -101,6 +102,15 @@ struct GeneralSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
+            Picker("外观", selection: $settings.appearance) {
+                Text("自动（跟随系统）").tag("auto")
+                Text("浅色").tag("light")
+                Text("深色").tag("dark")
+            }
+            Text("手动选择后，系统切换深浅色时速下保持所选外观")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 2)
             Toggle("小于 1MB 的文件不分段", isOn: Binding(
                 get: { settings.minSegmentSize > 0 },
                 set: { settings.minSegmentSize = $0 ? 1024 * 1024 : 0 }
@@ -112,6 +122,11 @@ struct GeneralSettingsView: View {
             // 菜单栏图标样式即时生效（无需关闭设置窗口）
             SettingsStore.shared.update { $0.menuBarIconStyle = newStyle }
             StatusItemController.shared.applyIconStyle(style: newStyle)
+        }
+        .onChange(of: settings.appearance) { newMode in
+            // 外观即时生效（无需关闭设置窗口）：auto/light/dark
+            SettingsStore.shared.update { $0.appearance = newMode }
+            model.applySettings()
         }
     }
 }
