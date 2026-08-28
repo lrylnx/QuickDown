@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     @Published var speeds: [UUID: Double] = [:]
     @Published var serverPort: UInt16 = 10007
     @Published var showAddSheet = false
+    /// 等待确认的接管任务 id 队列（确认窗口逐个展示）
+    @Published var confirmQueue: [UUID] = []
 
     private var lastSnapshot: [UUID: (bytes: Int64, date: Date)] = [:]
     private var ticker: Timer?
@@ -36,6 +38,13 @@ final class AppModel: ObservableObject {
         NotificationCenter.default.addObserver(forName: .quickdownShowMainWindow, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.showMainWindow() }
         }
+        // 接管确认流程：/add 到达且开启确认时，弹「确认下载」窗口（可重命名/选位置）
+        NotificationCenter.default.addObserver(forName: .quickdownConfirmDownload, object: nil, queue: .main) { [weak self] note in
+            guard let self,
+                  let uuidString = note.object as? String,
+                  let id = UUID(uuidString: uuidString) else { return }
+            Task { @MainActor in self.enqueueConfirm(id) }
+        }
         startServer()
         refresh()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -48,6 +57,50 @@ final class AppModel: ObservableObject {
     /// 显示主窗口（菜单栏左键 / 接管下载 / 通知触发）
     func showMainWindow() {
         StatusItemController.shared.showMainWindow()
+    }
+
+    // MARK: - 接管确认窗口
+
+    private func enqueueConfirm(_ id: UUID) {
+        guard !confirmQueue.contains(id) else { return }
+        confirmQueue.append(id)
+        showConfirmWindow()
+    }
+
+    /// 弹出「确认下载」窗口（唤起应用 + 打开窗口场景）
+    func showConfirmWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        StatusItemController.shared.showConfirmWindow()
+    }
+
+    /// 确认窗口当前展示的任务记录
+    var currentConfirmRecord: DownloadRecord? {
+        guard let id = confirmQueue.first else { return nil }
+        return records.first { $0.id == id }
+    }
+
+    /// 「开始下载」：应用重命名/目录修改并恢复任务
+    func confirmCapture(id: UUID, filename: String, directory: String) {
+        if let rec = records.first(where: { $0.id == id }) {
+            let nameChanged = filename.trimmingCharacters(in: .whitespaces) != rec.filename
+            let dirChanged = directory != rec.directory
+            if nameChanged || dirChanged {
+                manager.setSaveLocation(id, filename: filename, directory: directory)
+            }
+            manager.resume(id)
+        }
+        advanceConfirmQueue()
+    }
+
+    /// 「取消」：移除该任务（尚未开始下载，无文件残留）
+    func cancelCapture(id: UUID) {
+        manager.cancel(id)
+        advanceConfirmQueue()
+    }
+
+    private func advanceConfirmQueue() {
+        if !confirmQueue.isEmpty { confirmQueue.removeFirst() }
+        // 队列清空后由确认窗口视图自行 dismiss；还有后续任务则保持在窗口中逐个确认
     }
 
     // MARK: - 服务器
@@ -70,6 +123,11 @@ final class AppModel: ObservableObject {
 
     func refresh() {
         records = manager.snapshot()
+        // 待确认任务被删除（如用户在主列表手动移除）时同步清理确认队列
+        if !confirmQueue.isEmpty {
+            let ids = Set(records.map { $0.id })
+            confirmQueue.removeAll { !ids.contains($0) }
+        }
         // 选中项被删除时：自动选中列表第一条（支持连续删除）。
         // 注意：用户主动点击空白处取消选择（selectedID 为 nil）不会触发此处，避免闪烁。
         if let sel = selectedID, !records.contains(where: { $0.id == sel }) {

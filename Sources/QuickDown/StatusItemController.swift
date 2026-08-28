@@ -13,6 +13,7 @@ final class StatusItemController: NSObject {
     private var statusItem: NSStatusItem?
     private weak var model: AppModel?
     private var openWindowAction: (() -> Void)?
+    private var openConfirmWindowAction: (() -> Void)?
 
     func setup(model: AppModel) {
         self.model = model
@@ -106,6 +107,42 @@ final class StatusItemController: NSObject {
     /// 捕获 SwiftUI 的 openWindow 能力（主窗口关闭后仍可恢复）
     func setOpenWindow(_ action: @escaping () -> Void) {
         openWindowAction = action
+    }
+
+    /// 捕获「确认下载」窗口的打开能力
+    func setOpenConfirmWindow(_ action: @escaping () -> Void) {
+        openConfirmWindowAction = action
+    }
+
+    /// 打开（或带到前台）「确认下载」窗口；队列清空时由视图自行 dismiss
+    func showConfirmWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let action = openConfirmWindowAction {
+            action()
+        } else {
+            // 主窗口从未出现过（openWindow 尚未捕获）：先唤起主窗口触发捕获，再重试
+            openWindowAction?()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.popConfirmWindowToFront()
+            }
+            return
+        }
+        // openWindow 是异步创建窗口，稍候把它顶到所有应用前方
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.popConfirmWindowToFront()
+        }
+    }
+
+    /// 把确认窗口顶到最前。菜单栏应用（LSUIElement）在后台时
+    /// activate 在新版 macOS 抢不到焦点，需短暂置顶再恢复正常层级
+    private func popConfirmWindowToFront() {
+        NSApp.activate(ignoringOtherApps: true)
+        guard let win = NSApp.windows.first(where: { $0.title == "确认下载" }) else { return }
+        win.makeKeyAndOrderFront(nil)
+        win.level = .floating
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            win.level = .normal
+        }
     }
 
     /// 更新菜单栏文字：下载时显示速度，空闲时为空（只显示图标）

@@ -30,6 +30,13 @@ struct QuickDownApp: App {
             }
         }
 
+        // 接管确认窗口：浏览器下载被接管后逐个确认（可重命名/选保存位置）
+        Window("确认下载", id: "confirm") {
+            CaptureConfirmView()
+                .environmentObject(model)
+        }
+        .windowResizability(.contentSize)
+
         Settings {
             SettingsView()
                 .environmentObject(model)

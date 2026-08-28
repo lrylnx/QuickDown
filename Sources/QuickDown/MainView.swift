@@ -53,6 +53,9 @@ struct MainView: View {
             StatusItemController.shared.setOpenWindow {
                 action(id: "main")
             }
+            StatusItemController.shared.setOpenConfirmWindow {
+                action(id: "confirm")
+            }
         }
     }
 

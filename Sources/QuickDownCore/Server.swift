@@ -5,6 +5,8 @@ import CryptoKit
 /// 请求唤起速下主窗口（浏览器接管下载时触发）
 public extension Notification.Name {
     static let quickdownShowMainWindow = Notification.Name("quickdown.showMainWindow")
+    /// 请求弹出「确认下载」窗口（接管确认流程开启时触发，object 为任务 UUID 字符串）
+    static let quickdownConfirmDownload = Notification.Name("quickdown.confirmDownload")
 }
 
 // MARK: - 本地 HTTP / WebSocket 服务器（基于 POSIX socket，供浏览器扩展调用）
@@ -154,10 +156,18 @@ public final class LocalServer: @unchecked Sendable {
             return (200, "{\"name\":\"QuickDown\",\"version\":\"1.0\",\"desc\":\"速下下载管理器本地服务\"}")
         case ("POST", "/add"):
             let result = handleAdd(req.body)
-            if result.0 == 200 && SettingsStore.shared.settings.popWindowOnCapture {
-                activateApp()
+            if result.0 == 200 {
+                let s = SettingsStore.shared.settings
+                if s.confirmOnCapture, let id = result.2 {
+                    // 确认模式：任务已按「暂停」入列，通知界面弹确认窗口（窗口内部负责唤起应用）
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: .quickdownConfirmDownload, object: id.uuidString)
+                    }
+                } else if s.popWindowOnCapture {
+                    activateApp()
+                }
             }
-            return result
+            return (result.0, result.1)
         case ("GET", "/status"):
             let active = manager.snapshot().filter { $0.isActive }.count
             return (200, "{\"active\":\(active)}")
@@ -169,18 +179,20 @@ public final class LocalServer: @unchecked Sendable {
         }
     }
 
-    private func handleAdd(_ body: Data) -> (Int, String) {
+    private func handleAdd(_ body: Data) -> (Int, String, UUID?) {
         var request: NewDownloadRequest
         do {
             request = try JSONDecoder().decode(NewDownloadRequest.self, from: body)
         } catch {
-            return (400, "{\"error\":\"invalid json\"}")
+            return (400, "{\"error\":\"invalid json\"}", nil)
         }
         guard let url = URL(string: request.url), url.scheme != nil else {
-            return (400, "{\"error\":\"invalid url\"}")
+            return (400, "{\"error\":\"invalid url\"}", nil)
         }
-        let id = manager.add(request)
-        return (200, "{\"ok\":true,\"id\":\"\(id.uuidString)\"}")
+        // 确认模式开启时：接管来的任务先暂停入列，等用户在确认窗口点「开始下载」
+        let confirm = SettingsStore.shared.settings.confirmOnCapture
+        let id = manager.add(request, autoStart: !confirm)
+        return (200, "{\"ok\":true,\"id\":\"\(id.uuidString)\"}", id)
     }
 
     /// 唤起应用主窗口（仅当速下不在前台时，避免打扰正在操作其他应用的用户）

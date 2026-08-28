@@ -72,8 +72,10 @@ public final class DownloadManager: @unchecked Sendable {
 
     // MARK: - 增删改
 
+    /// 新增下载。autoStart=false 时以「已暂停」状态入列（接管确认流程用），
+    /// 由确认窗口或用户手动恢复。
     @discardableResult
-    public func add(_ request: NewDownloadRequest) -> UUID {
+    public func add(_ request: NewDownloadRequest, autoStart: Bool = true) -> UUID {
         var filename = request.filename ?? ""
         if filename.isEmpty, let url = URL(string: request.url) {
             filename = FileNaming.filename(fromURL: url) ?? "download"
@@ -85,6 +87,7 @@ public final class DownloadManager: @unchecked Sendable {
             url: request.url,
             filename: filename,
             directory: directory,
+            status: autoStart ? .queued : .paused,
             referer: request.referer,
             userAgent: request.userAgent,
             cookie: request.cookie
@@ -99,8 +102,31 @@ public final class DownloadManager: @unchecked Sendable {
         lock.unlock()
         persist()
         notify()
-        startNext()
+        if autoStart {
+            startNext()
+        }
         return record.id
+    }
+
+    /// 更新未开始任务（paused/queued）的文件名与保存目录（接管确认窗口用）
+    public func setSaveLocation(_ id: UUID, filename: String, directory: String) {
+        let clean = FileNaming.sanitize(filename)
+        guard !clean.isEmpty, !directory.isEmpty else { return }
+        lock.lock()
+        let box = boxes[id]
+        let settingsCopy = settings
+        lock.unlock()
+        guard let box else { return }
+        box.mutate { rec in
+            guard rec.status == .paused || rec.status == .queued else { return }
+            rec.filename = clean
+            rec.directory = directory
+            rec.finalPath = FileNaming.uniquePath(
+                directory: rec.resolvedSaveDirectory(settings: settingsCopy),
+                filename: clean)
+        }
+        persist()
+        notify()
     }
 
     public func pause(_ id: UUID) {
