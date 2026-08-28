@@ -19,8 +19,7 @@ final class StatusItemController: NSObject {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "arrow.down.circle.fill",
-                                   accessibilityDescription: "速下下载管理器")
+            applyIconStyle(to: button)
             button.imagePosition = .imageLeading
             button.target = self
             button.action = #selector(statusClicked(_:))
@@ -28,6 +27,80 @@ final class StatusItemController: NSObject {
             button.toolTip = "速下下载管理器：左键打开主界面，右键菜单"
         }
         statusItem = item
+    }
+
+    /// 按当前设置应用菜单栏图标样式（设置变更时即时刷新）
+    func applyIconStyle(style: String? = nil) {
+        let s = style ?? SettingsStore.shared.settings.menuBarIconStyle
+        guard let button = statusItem?.button else { return }
+        applyIconStyle(to: button, style: s)
+    }
+
+    private func applyIconStyle(to button: NSStatusBarButton, style: String? = nil) {
+        let s = style ?? SettingsStore.shared.settings.menuBarIconStyle
+        if s == "mono" {
+            let img = makeMonoStatusImage()
+            img.isTemplate = true   // 模板图：深色菜单栏自动白、浅色自动黑，与其他图标一致
+            button.image = img
+        } else {
+            button.image = makeStatusImage()
+        }
+    }
+
+    /// 绘制菜单栏图标（彩色版）：与 App 图标同风格 —— 蓝靛渐变圆角底 + 白色圆润下箭头
+    private func makeStatusImage() -> NSImage {
+        let d: CGFloat = 18
+        let img = NSImage(size: NSSize(width: d, height: d))
+        img.lockFocus()
+        defer { img.unlockFocus() }
+
+        let rect = NSRect(x: 0, y: 0, width: d, height: d)
+        let bg = NSBezierPath(roundedRect: rect, xRadius: d * 0.30, yRadius: d * 0.30)
+        let grad = NSGradient(colors: [
+            NSColor(srgbRed: 0.22, green: 0.44, blue: 0.98, alpha: 1),
+            NSColor(srgbRed: 0.55, green: 0.38, blue: 0.95, alpha: 1),
+        ])!
+        grad.draw(in: bg, angle: 135)
+
+        NSColor.white.setStroke()
+        let bp = NSBezierPath()
+        bp.lineWidth = 3.0
+        bp.lineCapStyle = .round
+        bp.lineJoinStyle = .round
+        let cx = d / 2
+        bp.move(to: NSPoint(x: cx, y: 14.0))
+        bp.line(to: NSPoint(x: cx, y: 9.2))
+        bp.move(to: NSPoint(x: cx - 4.4, y: 9.2))
+        bp.line(to: NSPoint(x: cx, y: 3.8))
+        bp.move(to: NSPoint(x: cx + 4.4, y: 9.2))
+        bp.line(to: NSPoint(x: cx, y: 3.8))
+        bp.stroke()
+
+        return img
+    }
+
+    /// 绘制菜单栏图标（黑白版）：纯下箭头模板图，颜色交给系统自动适配
+    private func makeMonoStatusImage() -> NSImage {
+        let d: CGFloat = 18
+        let img = NSImage(size: NSSize(width: d, height: d))
+        img.lockFocus()
+        defer { img.unlockFocus() }
+
+        NSColor.black.setStroke()   // 模板图只取 alpha，实际颜色由系统决定
+        let bp = NSBezierPath()
+        bp.lineWidth = 2.4
+        bp.lineCapStyle = .round
+        bp.lineJoinStyle = .round
+        let cx = d / 2
+        bp.move(to: NSPoint(x: cx, y: 13.2))
+        bp.line(to: NSPoint(x: cx, y: 8.6))
+        bp.move(to: NSPoint(x: cx - 3.6, y: 8.6))
+        bp.line(to: NSPoint(x: cx, y: 4.2))
+        bp.move(to: NSPoint(x: cx + 3.6, y: 8.6))
+        bp.line(to: NSPoint(x: cx, y: 4.2))
+        bp.stroke()
+
+        return img
     }
 
     /// 捕获 SwiftUI 的 openWindow 能力（主窗口关闭后仍可恢复）
@@ -53,11 +126,8 @@ final class StatusItemController: NSObject {
 
     func showMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        openWindowAction?() // SwiftUI 原生恢复窗口（即使已关闭）
-        // 兜底：窗口已存在时直接置前
-        if let w = NSApp.windows.first(where: { $0.title.contains("速下") || $0.isMainWindow }) {
-            w.makeKeyAndOrderFront(nil)
-        }
+        // SwiftUI 的 Window 场景保证单窗口：窗口已存在则带到前台，已关闭则重建
+        openWindowAction?()
     }
 
     private func buildMenu() -> NSMenu {

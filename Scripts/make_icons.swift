@@ -20,7 +20,7 @@ func writePNG(_ img: CGImage, to url: URL) {
     CGImageDestinationFinalize(dest)
 }
 
-/// 绘制：圆角渐变底 + 白色向下箭头入托盘
+/// 绘制：深蓝靛渐变圆角底 + 高光 + 白色圆润向下箭头 + 落地线
 func drawDownloadIcon(size: Int) -> CGImage {
     let ctx = makeContext(size)
     let s = CGFloat(size)
@@ -30,46 +30,68 @@ func drawDownloadIcon(size: Int) -> CGImage {
     let inset = s * 0.06
     let rect = CGRect(x: inset, y: inset, width: s - inset * 2, height: s - inset * 2)
     let path = CGPath(roundedRect: rect, cornerWidth: s * 0.22, cornerHeight: s * 0.22, transform: nil)
+    ctx.saveGState()
     ctx.addPath(path)
     ctx.clip()
 
-    // 渐变（绿 -> 蓝）
+    // 背景渐变（深蓝 -> 靛紫，对角）
     let colors = [
-        CGColor(red: 0.14, green: 0.72, blue: 0.48, alpha: 1),
-        CGColor(red: 0.10, green: 0.50, blue: 0.88, alpha: 1),
+        CGColor(srgbRed: 0.20, green: 0.42, blue: 0.98, alpha: 1),   // 亮蓝
+        CGColor(srgbRed: 0.55, green: 0.36, blue: 0.95, alpha: 1),   // 靛紫
     ] as CFArray
     let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])!
     ctx.drawLinearGradient(grad,
-                           start: CGPoint(x: 0, y: s),
-                           end: CGPoint(x: s, y: 0),
+                           start: CGPoint(x: rect.minX, y: rect.maxY),
+                           end: CGPoint(x: rect.maxX, y: rect.minY),
                            options: [])
 
-    // 向下箭头
-    ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    // 顶部高光（左上柔和光晕）
+    let hlColors = [
+        CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.32),
+        CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.0),
+    ] as CFArray
+    let hl = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: hlColors, locations: [0, 1])!
+    let hlCenter = CGPoint(x: rect.minX + rect.width * 0.28, y: rect.maxY - rect.height * 0.25)
+    ctx.drawRadialGradient(hl,
+                           startCenter: hlCenter, startRadius: 0,
+                           endCenter: hlCenter, endRadius: rect.width * 0.75,
+                           options: [])
+
+    // 白色圆润向下箭头（round cap/join 描边绘制，整体圆润精致）
+    // 注意：CGContext 坐标原点在左下、y 向上，因此"向下"= y 递减
     let cx = s * 0.5
-    let shaftW = s * 0.17
-    let shaftTop = s * 0.26
-    let shaftBottom = s * 0.56
-    ctx.fill(CGRect(x: cx - shaftW / 2, y: shaftTop, width: shaftW, height: shaftBottom - shaftTop))
-    // 箭头三角
-    let tri = CGMutablePath()
-    tri.move(to: CGPoint(x: cx - s * 0.30, y: s * 0.50))
-    tri.addLine(to: CGPoint(x: cx + s * 0.30, y: s * 0.50))
-    tri.addLine(to: CGPoint(x: cx, y: s * 0.74))
-    tri.closeSubpath()
-    ctx.addPath(tri)
-    ctx.fillPath()
-    // 托盘
-    let tray = CGMutablePath()
-    tray.move(to: CGPoint(x: s * 0.20, y: s * 0.20))
-    tray.addLine(to: CGPoint(x: s * 0.20, y: s * 0.30))
-    tray.addLine(to: CGPoint(x: s * 0.30, y: s * 0.30))
-    tray.addLine(to: CGPoint(x: s * 0.70, y: s * 0.30))
-    tray.addLine(to: CGPoint(x: s * 0.80, y: s * 0.30))
-    tray.addLine(to: CGPoint(x: s * 0.80, y: s * 0.20))
-    tray.closeSubpath()
-    ctx.addPath(tray)
-    ctx.fillPath()
+    let shaftTop = s * 0.74   // 杆顶部（上方）
+    let joint = s * 0.50      // 杆底部 / 箭头交汇点（中部）
+    let tipY = s * 0.26       // 箭头尖端（下方）
+    let half = s * 0.27
+    ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+    ctx.setLineCap(.round)
+    ctx.setLineJoin(.round)
+    ctx.setLineWidth(s * 0.165)
+
+    let arrow = CGMutablePath()
+    arrow.move(to: CGPoint(x: cx, y: shaftTop))
+    arrow.addLine(to: CGPoint(x: cx, y: joint))
+    // 两条翼线从杆底两侧汇聚到下方尖端，构成标准的向下箭头（⌄）
+    arrow.move(to: CGPoint(x: cx - half, y: joint))
+    arrow.addLine(to: CGPoint(x: cx, y: tipY))
+    arrow.move(to: CGPoint(x: cx + half, y: joint))
+    arrow.addLine(to: CGPoint(x: cx, y: tipY))
+    ctx.addPath(arrow)
+    ctx.strokePath()
+
+    // 落地线（箭头下方的收纳托盘线，半透明白）
+    ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.85))
+    ctx.setLineWidth(s * 0.055)
+    ctx.setLineCap(.round)
+    let line = CGMutablePath()
+    let lineY = s * 0.13
+    line.move(to: CGPoint(x: cx - s * 0.23, y: lineY))
+    line.addLine(to: CGPoint(x: cx + s * 0.23, y: lineY))
+    ctx.addPath(line)
+    ctx.strokePath()
+
+    ctx.restoreGState()
 
     return ctx.makeImage()!
 }

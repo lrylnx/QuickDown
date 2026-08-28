@@ -8,32 +8,11 @@ struct MainView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // 左侧列表：自定义 ScrollView + 行（不用 List —— List 的选中机制与任何点击手势
-            // 冲突，单击选中会失灵；改用 AppKit 点击识别器，单击/双击完全可控）
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(model.records) { rec in
-                        DownloadRow(rec: rec)
-                            .contentShape(Rectangle())
-                            .background(rec.id == model.selectedID
-                                        ? Color.accentColor.opacity(0.12)
-                                        : Color.clear)
-                            .overlay(RowClickHandler(
-                                onSelect: { model.selectedID = rec.id },
-                                onDouble: { model.openFile(rec) }))
-                            .contextMenu { rowMenu(rec) }
-                    }
-                }
-            }
-            .overlay {
-                if model.records.isEmpty {
-                    EmptyListView()
-                }
-            }
-            .frame(width: 430)
-            .frame(maxHeight: .infinity)
+            sidebar
 
-            Divider()
+            Rectangle()
+                .fill(Color.primary.opacity(0.07))
+                .frame(width: 1)
 
             // 右侧详情：内容在内部切换，面板本身保持稳定
             ZStack {
@@ -41,7 +20,7 @@ struct MainView: View {
                    let rec = model.records.first(where: { $0.id == sel }) {
                     DetailView(rec: rec)
                 } else {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 14) {
                         Image(systemName: "arrow.down.circle")
                             .font(.system(size: 56))
                             .foregroundStyle(.secondary)
@@ -51,6 +30,7 @@ struct MainView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("速下下载管理器")
@@ -77,6 +57,46 @@ struct MainView: View {
     }
 
     @Environment(\.openWindow) private var openWindowEnv
+
+    // MARK: 侧边栏
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("下载任务")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("\(model.records.count)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.primary.opacity(0.07)))
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 12)
+            .padding(.bottom, 9)
+
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(model.records) { rec in
+                        DownloadRow(rec: rec)
+                            .contextMenu { rowMenu(rec) }
+                    }
+                }
+                .padding(.bottom, 10)
+            }
+            .overlay {
+                if model.records.isEmpty {
+                    EmptyListView()
+                }
+            }
+        }
+        .frame(width: 430)
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
@@ -201,22 +221,35 @@ struct EmptyListView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "tray")
-                .font(.system(size: 52))
-                .foregroundStyle(.tertiary)
-            Text("暂无下载任务")
-                .font(.headline)
-            Text("点击右上角「+」新建下载；\n或在浏览器中点击下载链接，速下会自动接管。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+        VStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(QDTheme.accent.opacity(0.10))
+                    .frame(width: 92, height: 92)
+                Circle()
+                    .fill(QDTheme.accent.opacity(0.05))
+                    .frame(width: 68, height: 68)
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundStyle(QDTheme.accentGradient)
+            }
+
+            VStack(spacing: 5) {
+                Text("暂无下载任务")
+                    .font(.headline)
+                Text("点击「新建下载」开始，\n或在浏览器中点击下载链接，速下会自动接管。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+            }
+
             Button {
                 model.showAddSheet = true
             } label: {
                 Label("新建下载", systemImage: "plus")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(QDPrimaryButtonStyle())
             .keyboardShortcut("n", modifiers: .command)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -231,39 +264,28 @@ struct CategoryTag: View {
 
     var body: some View {
         Text(category.rawValue)
-            .font(.caption2.weight(.medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15))
-            .foregroundStyle(color)
-            .clipShape(Capsule())
-    }
-
-    var color: Color {
-        switch category {
-        case .video: return .red
-        case .music: return .purple
-        case .archive: return .orange
-        case .image: return .blue
-        case .application: return .green
-        case .document: return .teal
-        case .code: return .indigo
-        case .other: return .gray
-        }
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background(Capsule().fill(category.color.opacity(0.14)))
+            .foregroundStyle(category.color)
+            .overlay(Capsule().stroke(category.color.opacity(0.18), lineWidth: 1))
     }
 }
 
 // MARK: - 列表行点击识别器（AppKit 原生，单击/双击互不干扰）
+// 在原有单击/双击基础上补充鼠标悬停跟踪，用于行高亮反馈。
 
-/// 行的透明点击层：单击选中 + 双击打开
 struct RowClickHandler: NSViewRepresentable {
     let onSelect: () -> Void
     let onDouble: () -> Void
+    var onHover: (Bool) -> Void = { _ in }
 
     func makeNSView(context: Context) -> RowClickNSView {
         let view = RowClickNSView()
         view.onSelect = onSelect
         view.onDouble = onDouble
+        view.onHover = onHover
         let single = NSClickGestureRecognizer(target: view, action: #selector(RowClickNSView.singleClicked(_:)))
         single.numberOfClicksRequired = 1
         single.delaysPrimaryMouseButtonEvents = false // 单击立即响应
@@ -278,12 +300,29 @@ struct RowClickHandler: NSViewRepresentable {
     func updateNSView(_ nsView: RowClickNSView, context: Context) {
         nsView.onSelect = onSelect
         nsView.onDouble = onDouble
+        nsView.onHover = onHover
     }
 }
 
 final class RowClickNSView: NSView {
     var onSelect: (() -> Void)?
     var onDouble: (() -> Void)?
+    var onHover: (Bool) -> Void = { _ in }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        let opts: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect]
+        addTrackingArea(NSTrackingArea(rect: .zero, options: opts, owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHover(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHover(false)
+    }
 
     @objc func singleClicked(_ sender: NSClickGestureRecognizer) {
         onSelect?()
@@ -304,57 +343,112 @@ final class RowClickNSView: NSView {
 struct DownloadRow: View {
     @EnvironmentObject private var model: AppModel
     let rec: DownloadRecord
+    @State private var hovering = false
+    /// 进度条是否可见：下载/暂停/出错始终可见；完成项仅在“本次会话刚完成”时显示 1 秒后淡出，
+    /// 避免列表长期堆满绿色进度条。布局槽位固定保留，行高不跳。
+    @State private var showProgressBar = true
+
+    private var isSelected: Bool { rec.id == model.selectedID }
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: Format.fileIcon(rec))
-                .font(.system(size: 22))
-                .foregroundStyle(.tint)
-                .frame(width: 28)
+            QDCategoryIcon(symbol: Format.fileIcon(rec),
+                           color: rec.category.color,
+                           size: 34)
 
+            // 固定三行结构，任何状态下高度一致：文件名行 + 进度条行 + 状态信息行，切换不跳动
             VStack(alignment: .leading, spacing: 4) {
-                Text(rec.filename)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                if rec.isActive || rec.status == .paused {
-                    ProgressView(value: rec.progress >= 0 ? rec.progress : 0)
-                        .progressViewStyle(.linear)
-                        .frame(maxWidth: .infinity)
+                HStack(spacing: 6) {
+                    Text(rec.filename)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    CategoryTag(category: rec.category)
                 }
 
-                Text(Format.statusText(rec, speed: model.speeds[rec.id]))
-                    .font(.caption)
-                    .foregroundStyle(statusColor)
-                    .lineLimit(1)
-            }
+                QDProgressBar(value: rec.progress >= 0 ? rec.progress : 0,
+                              height: 5,
+                              gradient: progressGradient)
+                    .opacity(showProgressBar ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.35), value: showProgressBar)
 
-            Spacer(minLength: 8)
-
-            VStack(alignment: .trailing, spacing: 2) {
-                CategoryTag(category: rec.category)
-                if rec.status == .downloading, let s = model.speeds[rec.id], s > 0 {
-                    Text(Format.speed(s))
+                HStack(spacing: 5) {
+                    StatusDot(color: statusColor, size: 6)
+                    Text(Format.statusText(rec, speed: model.speeds[rec.id]))
                         .font(.caption)
-                        .monospacedDigit()
+                        .foregroundStyle(statusColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    sizeText
                 }
-                let shownSize = rec.totalSize > 0 ? rec.totalSize : rec.downloadedSize
-                Text(shownSize > 0 ? Format.bytes(shownSize) : "—")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(backgroundColor)
+                .padding(.horizontal, 8)
+        )
+        .contentShape(Rectangle())
+        .overlay(RowClickHandler(
+            onSelect: { model.selectedID = rec.id },
+            onDouble: { model.openFile(rec) },
+            onHover: { hovering = $0 }))
+        .onAppear {
+            // 首次出现时若已是完成状态（如启动后、切换筛选），不显示绿色进度条
+            if rec.status == .completed { showProgressBar = false }
+        }
+        .onChange(of: rec.status) { newStatus in
+            // 仅在本次会话内真正“完成”的那一刻，绿色进度条显示 1 秒后淡出
+            if newStatus == .completed {
+                withAnimation(.easeInOut(duration: 0.25)) { showProgressBar = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    withAnimation(.easeOut(duration: 0.5)) { showProgressBar = false }
+                }
+            }
+        }
+    }
+
+    /// 进度条颜色随状态变化：下载中品牌渐变、完成绿色、暂停橙色、出错红色
+    private var progressGradient: LinearGradient {
+        switch rec.status {
+        case .completed:
+            return LinearGradient(colors: [Color(red: 0.24, green: 0.70, blue: 0.45),
+                                           Color(red: 0.35, green: 0.85, blue: 0.58)],
+                                  startPoint: .leading, endPoint: .trailing)
+        case .paused:
+            return LinearGradient(colors: [Color(red: 0.96, green: 0.60, blue: 0.25),
+                                           Color(red: 0.98, green: 0.70, blue: 0.38)],
+                                  startPoint: .leading, endPoint: .trailing)
+        case .error:
+            return LinearGradient(colors: [Color(red: 0.95, green: 0.38, blue: 0.36),
+                                           Color(red: 0.98, green: 0.55, blue: 0.42)],
+                                  startPoint: .leading, endPoint: .trailing)
+        default:
+            return QDTheme.accentGradient
+        }
+    }
+
+    private var sizeText: some View {
+        let shownSize = rec.totalSize > 0 ? rec.totalSize : rec.downloadedSize
+        return Text(shownSize > 0 ? Format.bytes(shownSize) : "—")
+            .font(.caption2)
+            .monospacedDigit()
+            .foregroundStyle(.tertiary)
+    }
+
+    private var backgroundColor: Color {
+        if isSelected { return Color.accentColor.opacity(0.12) }
+        if hovering { return Color.primary.opacity(0.045) }
+        return .clear
     }
 
     private var statusColor: Color {
-        switch rec.status {
-        case .error: return .red
-        case .completed: return .green
-        case .paused: return .orange
-        case .cancelled: return .secondary
-        default: return .secondary
-        }
+        rec.status.color
     }
 }
 
@@ -365,57 +459,11 @@ struct DetailView: View {
     let rec: DownloadRecord
 
     var body: some View {
+        // 所有状态共用同一结构（头部 + 信息卡片 + 操作按钮），无独立进度条卡片，切换不跳动
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                Image(systemName: Format.fileIcon(rec))
-                    .font(.system(size: 40))
-                    .foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(rec.filename)
-                        .font(.headline)
-                        .lineLimit(2)
-                    Text(statusText)
-                        .font(.caption)
-                        .foregroundStyle(statusColor)
-                }
-            }
-            .padding(.top, 8)
+            header
 
-            if rec.isActive || rec.status == .paused {
-                ProgressView(value: rec.progress >= 0 ? rec.progress : 0)
-                    .progressViewStyle(.linear)
-                HStack {
-                    Text(rec.progress >= 0 ? String(format: "%.1f%%", rec.progress * 100) : "大小未知")
-                        .font(.caption)
-                    Spacer()
-                    if let s = model.speeds[rec.id], s > 0 {
-                        Text("\(Format.speed(s)) · 剩余\(Format.eta(remaining: rec.totalSize - rec.downloadedSize, speed: s))")
-                            .font(.caption)
-                    }
-                }
-            }
-
-            Divider()
-
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-                GridRow { Text("状态").gridColumnAlignment(.trailing); Text(statusText).foregroundStyle(statusColor) }
-                GridRow { Text("分类"); CategoryTag(category: rec.category) }
-                if rec.totalSize > 0 {
-                    GridRow { Text("大小"); Text(Format.bytes(rec.totalSize)) }
-                }
-                if rec.downloadedSize > 0 {
-                    GridRow { Text("已下载"); Text(Format.bytes(rec.downloadedSize)) }
-                }
-                GridRow { Text("分段"); Text(rec.isSingle ? "单连接" : "\(rec.segments.count) 段") }
-                GridRow { Text("创建"); Text(Format.date(rec.createdAt)) }
-                if let c = rec.completedAt {
-                    GridRow { Text("完成"); Text(Format.date(c)) }
-                }
-                GridRow { Text("目录"); Text(rec.directory).lineLimit(2).truncationMode(.middle) }
-                GridRow { Text("链接"); Text(rec.url).lineLimit(3).truncationMode(.middle) }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            infoCard
 
             Spacer(minLength: 12)
 
@@ -427,27 +475,134 @@ struct DetailView: View {
                 } label: {
                     Label("打开文件夹", systemImage: "folder")
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
                 .disabled(rec.status != .completed)
             }
             .padding(.top, 6)
             .padding(.bottom, 14)
             .frame(maxWidth: .infinity)
         }
-        .padding(14)
+        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+
+    // MARK: 头部
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            QDCategoryIcon(symbol: Format.fileIcon(rec),
+                           color: rec.category.color,
+                           size: 50)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(rec.filename)
+                    .font(.system(size: 16, weight: .semibold))
+                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    StatusDot(color: statusColor, size: 8)
+                    Text(statusText)
+                        .font(.caption)
+                        .foregroundStyle(statusColor)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+        }
+        .padding(.top, 6)
+    }
+
+    // MARK: 信息卡片
+
+    private var infoCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("详细信息")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 9) {
+                GridRow {
+                    infoLabel("状态")
+                    Text(statusText)
+                        .foregroundStyle(statusColor)
+                        .gridColumnAlignment(.leading)
+                }
+                GridRow {
+                    infoLabel("分类")
+                    CategoryTag(category: rec.category)
+                }
+                if rec.progress >= 0 {
+                    GridRow {
+                        infoLabel("进度")
+                        Text(String(format: "%.1f%%", rec.progress * 100)).monospacedDigit()
+                    }
+                }
+                if rec.totalSize > 0 {
+                    GridRow {
+                        infoLabel("大小")
+                        Text(Format.bytes(rec.totalSize)).monospacedDigit()
+                    }
+                }
+                if rec.downloadedSize > 0 {
+                    GridRow {
+                        infoLabel("已下载")
+                        Text(Format.bytes(rec.downloadedSize)).monospacedDigit()
+                    }
+                }
+                GridRow {
+                    infoLabel("分段")
+                    Text(rec.isSingle ? "单连接" : "\(rec.segments.count) 段")
+                }
+                GridRow {
+                    infoLabel("创建")
+                    Text(Format.date(rec.createdAt)).monospacedDigit()
+                }
+                if let c = rec.completedAt {
+                    GridRow {
+                        infoLabel("完成")
+                        Text(Format.date(c)).monospacedDigit()
+                    }
+                }
+                GridRow {
+                    infoLabel("目录")
+                    Text(rec.directory).lineLimit(2).truncationMode(.middle)
+                }
+                GridRow {
+                    infoLabel("链接")
+                    Text(rec.url).lineLimit(3).truncationMode(.middle)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .qdCard()
+    }
+
+    private func infoLabel(_ title: String) -> some View {
+        Text(title)
+            .foregroundStyle(.tertiary)
+            .gridColumnAlignment(.trailing)
+    }
+
+    // MARK: 操作按钮
 
     @ViewBuilder
     private var actionButton: some View {
         switch rec.status {
         case .downloading, .connecting, .queued:
             Button { model.pause(rec.id) } label: { Label("暂停", systemImage: "pause.fill") }
+                .buttonStyle(QDPrimaryButtonStyle())
         case .paused:
             Button { model.resume(rec.id) } label: { Label("继续", systemImage: "play.fill") }
+                .buttonStyle(QDPrimaryButtonStyle())
         case .error:
             Button { model.retry(rec.id) } label: { Label("重试", systemImage: "arrow.clockwise") }
+                .buttonStyle(QDPrimaryButtonStyle())
         case .completed:
             Button { model.cancel(rec.id) } label: { Label("删除记录", systemImage: "trash") }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .tint(.red)
                 .help("仅从列表移除，文件保留在下载目录")
         case .cancelled:
             EmptyView()
@@ -459,12 +614,7 @@ struct DetailView: View {
     }
 
     private var statusColor: Color {
-        switch rec.status {
-        case .error: return .red
-        case .completed: return .green
-        case .paused: return .orange
-        default: return .secondary
-        }
+        rec.status.color
     }
 }
 
@@ -474,10 +624,14 @@ struct StatusBarView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        HStack(spacing: 14) {
-            Label("进行中 \(model.activeCount)/\(model.records.count)", systemImage: "arrow.down.circle")
+        HStack(spacing: 16) {
+            HStack(spacing: 6) {
+                StatusDot(color: model.activeCount > 0 ? QDTheme.accent : .secondary, size: 6)
+                Text("进行中 \(model.activeCount)/\(model.records.count)")
+            }
             if model.totalSpeed > 0 {
                 Label(Format.speed(model.totalSpeed), systemImage: "gauge.with.dots.needle.67percent")
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             if model.serverPort > 0 {
@@ -489,9 +643,10 @@ struct StatusBarView: View {
             }
         }
         .font(.caption)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
         .background(.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 }
 
@@ -506,12 +661,20 @@ struct AddURLSheet: View {
     @State private var directory = SettingsStore.shared.settings.downloadDirectory
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("新建下载")
-                .font(.title2.bold())
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                QDCategoryIcon(symbol: "link", color: QDTheme.accent, size: 38)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("新建下载")
+                        .font(.title3.bold())
+                    Text("粘贴下载链接，其余可留空")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("下载链接")
+                fieldLabel("下载链接")
                 TextField("https://…", text: $url)
                     .textFieldStyle(.roundedBorder)
                     .onAppear {
@@ -523,13 +686,13 @@ struct AddURLSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("文件名（可选）")
+                fieldLabel("文件名（可选）")
                 TextField("留空则自动识别", text: $filename)
                     .textFieldStyle(.roundedBorder)
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("保存位置")
+                fieldLabel("保存位置")
                 HStack {
                     TextField("", text: $directory)
                         .textFieldStyle(.roundedBorder)
@@ -544,23 +707,35 @@ struct AddURLSheet: View {
                     } label: {
                         Image(systemName: "folder")
                     }
+                    .buttonStyle(.bordered)
                 }
             }
+
+            Divider()
 
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
                 Button("开始下载") {
                     model.add(urlString: url, filename: filename.isEmpty ? nil : filename,
                               directory: directory.isEmpty ? nil : directory)
                     dismiss()
                 }
+                .buttonStyle(QDPrimaryButtonStyle())
                 .keyboardShortcut(.defaultAction)
                 .disabled(!isValid)
             }
         }
-        .padding(20)
-        .frame(width: 460)
+        .padding(22)
+        .frame(width: 480)
+    }
+
+    private func fieldLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
     }
 
     private var isValid: Bool {

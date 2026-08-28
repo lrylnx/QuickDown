@@ -205,6 +205,7 @@ final class AppModel: ObservableObject {
         if server?.port != s.serverPort || server == nil {
             startServer()
         }
+        StatusItemController.shared.applyIconStyle()
     }
 }
 

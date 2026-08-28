@@ -13,6 +13,7 @@ public struct AppSettings: Codable, Sendable {
     public var speedLimitBps: Int64     // 0 = 不限速
     public var popWindowOnCapture: Bool // 扩展接管下载时弹出主窗口
     public var sortIntoCategories: Bool // 按中文分类保存到子文件夹
+    public var menuBarIconStyle: String // "color" 品牌彩色 / "mono" 黑白跟随系统
 
     // 代理
     public var proxyEnabled: Bool
@@ -32,6 +33,7 @@ public struct AppSettings: Codable, Sendable {
         speedLimitBps: Int64 = 0,
         popWindowOnCapture: Bool = true,
         sortIntoCategories: Bool = true,
+        menuBarIconStyle: String = "color",
         proxyEnabled: Bool = false,
         proxyHost: String = "127.0.0.1",
         proxyPort: Int = 7890,
@@ -48,6 +50,7 @@ public struct AppSettings: Codable, Sendable {
         self.speedLimitBps = speedLimitBps
         self.popWindowOnCapture = popWindowOnCapture
         self.sortIntoCategories = sortIntoCategories
+        self.menuBarIconStyle = menuBarIconStyle
         self.proxyEnabled = proxyEnabled
         self.proxyHost = proxyHost
         self.proxyPort = proxyPort
@@ -68,6 +71,7 @@ public struct AppSettings: Codable, Sendable {
         speedLimitBps = try c.decodeIfPresent(Int64.self, forKey: .speedLimitBps) ?? 0
         popWindowOnCapture = try c.decodeIfPresent(Bool.self, forKey: .popWindowOnCapture) ?? true
         sortIntoCategories = try c.decodeIfPresent(Bool.self, forKey: .sortIntoCategories) ?? true
+        menuBarIconStyle = try c.decodeIfPresent(String.self, forKey: .menuBarIconStyle) ?? "color"
         proxyEnabled = try c.decodeIfPresent(Bool.self, forKey: .proxyEnabled) ?? false
         proxyHost = try c.decodeIfPresent(String.self, forKey: .proxyHost) ?? "127.0.0.1"
         proxyPort = try c.decodeIfPresent(Int.self, forKey: .proxyPort) ?? 7890

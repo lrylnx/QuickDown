@@ -86,18 +86,33 @@ struct GeneralSettingsView: View {
             Text("分段数越高，支持 Range 的服务器下载越快（推荐 8，最高 32）")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .padding(.bottom, 2)
             Toggle("下载完成后通知", isOn: $settings.notifyOnComplete)
             Toggle("按分类保存到子文件夹", isOn: $settings.sortIntoCategories)
             Text("视频 / 音乐 / 压缩包 / 图片 / 应用程序 / 文档 / 代码 / 其他")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .padding(.bottom, 2)
+            Picker("菜单栏图标", selection: $settings.menuBarIconStyle) {
+                Text("品牌彩色").tag("color")
+                Text("黑白（跟随系统）").tag("mono")
+            }
+            Text("彩色与 App 图标同风格，黑白为模板图标自动适配深色/浅色菜单栏")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 2)
             Toggle("小于 1MB 的文件不分段", isOn: Binding(
                 get: { settings.minSegmentSize > 0 },
                 set: { settings.minSegmentSize = $0 ? 1024 * 1024 : 0 }
             ))
         }
         .formStyle(.grouped)
-        .padding(16)
+        .padding(20)
+        .onChange(of: settings.menuBarIconStyle) { newStyle in
+            // 菜单栏图标样式即时生效（无需关闭设置窗口）
+            SettingsStore.shared.update { $0.menuBarIconStyle = newStyle }
+            StatusItemController.shared.applyIconStyle(style: newStyle)
+        }
     }
 }
 
@@ -255,13 +270,21 @@ struct ExtensionSettingsView: View {
                     .foregroundStyle(.secondary)
                 ForEach(browsers) { browser in
                     HStack {
-                        Text(browser.name)
+                        HStack(spacing: 10) {
+                            QDCategoryIcon(symbol: browserSymbol(browser.id),
+                                           color: QDTheme.accent,
+                                           size: 28)
+                            Text(browser.name)
+                        }
                         Spacer()
                         Button("一键安装向导…") {
                             runInstallWizard(browser)
                         }
+                        .buttonStyle(.borderedProminent)
+                        .tint(QDTheme.accent)
+                        .controlSize(.small)
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 3)
                 }
             }
 
@@ -290,9 +313,18 @@ struct ExtensionSettingsView: View {
                 }
             }
         }
-        .padding(16)
+        .padding(20)
         .onAppear {
             browsers = Self.scanBrowsers()
+        }
+    }
+
+    private func browserSymbol(_ id: String) -> String {
+        switch id {
+        case "chrome", "edge", "thorium", "brave", "chromium": return "globe"
+        case "vivaldi", "opera": return "globe"
+        case "arc": return "sparkles"
+        default: return "puzzlepiece.extension"
         }
     }
 
@@ -399,7 +431,7 @@ struct ProxySettingsView: View {
             .disabled(!settings.proxyEnabled)
         }
         .formStyle(.grouped)
-        .padding(16)
+        .padding(20)
     }
 }
 
@@ -450,7 +482,7 @@ struct AdvancedSettingsView: View {
                 .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
-        .padding(16)
+        .padding(20)
     }
 
     private func setLoginItem(_ enable: Bool) {

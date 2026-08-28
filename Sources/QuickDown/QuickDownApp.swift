@@ -7,7 +7,9 @@ struct QuickDownApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup("速下下载管理器", id: "main") {
+        // 使用单窗口场景 Window（而非 WindowGroup）：保证无论 openWindow 被调用多少次，
+        // 主窗口永远只有一份 —— 已存在则带到前台，已关闭则重建，不会叠加出多个窗口。
+        Window("速下下载管理器", id: "main") {
             MainView()
                 .environmentObject(model)
                 .frame(minWidth: 820, minHeight: 520)
@@ -38,6 +40,12 @@ struct QuickDownApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     // 说明：应用以菜单栏应用运行（Info.plist LSUIElement=true，无 Dock 图标）。
     // 菜单栏图标由 StatusItemController 管理：左键打开主界面，右键菜单。
+
+    /// 关闭主窗口时只隐藏窗口，不退出应用（下载器需长期驻留菜单栏）。
+    /// 自定义 NSStatusItem 对 SwiftUI 不可见，必须显式阻止「最后一个窗口关闭即终止」。
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         DownloadManager.shared.persist()

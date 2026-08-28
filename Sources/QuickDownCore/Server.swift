@@ -190,9 +190,8 @@ public final class LocalServer: @unchecked Sendable {
             let isSelf = frontmost == Bundle.main.bundleIdentifier
             guard !isSelf else { return }
             NSApp.activate(ignoringOtherApps: true)
-            // 通知 App 侧：无论主窗口是否已关闭都用 SwiftUI openWindow 恢复并置前
+            // 通知 App 侧：SwiftUI 的 Window 场景保证只恢复/重建同一个主窗口，不会出现多个窗口
             NotificationCenter.default.post(name: .quickdownShowMainWindow, object: nil)
-            NSApp.windows.first { $0.isVisible || $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
         }
     }
 
