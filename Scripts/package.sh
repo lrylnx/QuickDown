@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 PKG_NAME="速下下载管理器-通用版"
 PKG_DIR="$ROOT/dist/$PKG_NAME"
 ZIP="$ROOT/dist/$PKG_NAME.zip"
@@ -24,7 +24,7 @@ find "$PKG_DIR" -name ".DS_Store" -delete
 echo "==> 3/4 写入安装说明与脚本"
 cat > "$PKG_DIR/安装说明.txt" <<'EOF'
 ══════════════════════════════════════════════════════════
-  速下 QuickDown — macOS 中文下载管理器（通用版 v1.0.0）
+  速下 QuickDown — macOS 中文下载管理器（通用版 v1.1.0）
 ══════════════════════════════════════════════════════════
 
 【这是什么】

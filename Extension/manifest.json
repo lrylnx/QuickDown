@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "速下 - 浏览器下载接管",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "将浏览器下载交给「速下」下载管理器（多线程加速、断点续传）",
-  "permissions": ["downloads", "storage", "contextMenus", "notifications", "webRequest"],
+  "permissions": ["downloads", "storage", "contextMenus", "notifications", "webRequest", "alarms"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*", "<all_urls>"],
   "background": {
     "service_worker": "background.js"
