@@ -132,6 +132,23 @@ func drawDownloadIcon(size: Int) -> CGImage {
     return ctx.makeImage()!
 }
 
+// MARK: - 源图标（Resources/AppIconSource.png 存在时优先使用）
+
+/// 从源图高质量缩放出指定尺寸
+func scaledImage(from source: CGImage, size: Int) -> CGImage {
+    let ctx = makeContext(size)
+    ctx.interpolationQuality = .high
+    ctx.draw(source, in: CGRect(x: 0, y: 0, width: CGFloat(size), height: CGFloat(size)))
+    return ctx.makeImage()!
+}
+
+/// 读取源图标；不存在返回 nil（此时回退到程序绘制的图标）
+func loadSourceIcon(_ url: URL) -> CGImage? {
+    guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+    return img
+}
+
 // MARK: - main
 
 let args = CommandLine.arguments
@@ -140,19 +157,30 @@ guard args.count >= 2 else {
     exit(1)
 }
 let root = URL(fileURLWithPath: args[1], isDirectory: true)
+let resDir = root.appendingPathComponent("Resources")
+try? FileManager.default.createDirectory(at: resDir, withIntermediateDirectories: true)
+
+// 源图标：Resources/AppIconSource.png（1024×1024，正式图标素材）
+let sourceImage = loadSourceIcon(resDir.appendingPathComponent("AppIconSource.png"))
+func renderIcon(size: Int) -> CGImage {
+    if let source = sourceImage { return scaledImage(from: source, size: size) }
+    return drawDownloadIcon(size: size)   // 回退：程序绘制
+}
+if sourceImage != nil {
+    print("使用源图标 AppIconSource.png")
+} else {
+    print("未找到 AppIconSource.png，使用程序绘制图标")
+}
 
 // 扩展图标 -> <root>/Extension/icons/（扩展加载目录）
 let extIcons = root.appendingPathComponent("Extension").appendingPathComponent("icons")
 try? FileManager.default.createDirectory(at: extIcons, withIntermediateDirectories: true)
 for size in [16, 48, 128] {
-    let img = drawDownloadIcon(size: size)
+    let img = renderIcon(size: size)
     writePNG(img, to: extIcons.appendingPathComponent("icon\(size).png"))
     print("扩展图标 icon\(size).png ✓")
 }
 
-// AppIcon -> <root>/Resources/
-let resDir = root.appendingPathComponent("Resources")
-try? FileManager.default.createDirectory(at: resDir, withIntermediateDirectories: true)
 let iconset = resDir.appendingPathComponent("AppIcon.iconset")
 try? FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 let sizes: [(Int, String)] = [
@@ -168,7 +196,7 @@ let sizes: [(Int, String)] = [
     (1024, "icon_512x512@2x.png"),
 ]
 for (size, name) in sizes {
-    let img = drawDownloadIcon(size: size)
+    let img = renderIcon(size: size)
     writePNG(img, to: iconset.appendingPathComponent(name))
 }
 print("AppIcon.iconset ✓")
