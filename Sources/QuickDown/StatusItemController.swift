@@ -48,35 +48,20 @@ final class StatusItemController: NSObject {
         }
     }
 
-    /// 绘制菜单栏图标（彩色版）：与 App 图标同风格 —— 翠绿渐变圆角底 + 白色双层下冲箭头
+    /// 菜单栏彩色图标：直接使用 App 图标的缩小版（与 Dock/Launchpad 图标完全一致）。
+    /// 裁掉图标四周约 10% 的网格留白，让主体在 18pt 菜单栏尺寸下足够清晰。
     private func makeStatusImage() -> NSImage {
         let d: CGFloat = 18
         let img = NSImage(size: NSSize(width: d, height: d))
         img.lockFocus()
         defer { img.unlockFocus() }
 
-        let rect = NSRect(x: 0, y: 0, width: d, height: d)
-        let bg = NSBezierPath(roundedRect: rect, xRadius: d * 0.30, yRadius: d * 0.30)
-        let grad = NSGradient(colors: [
-            NSColor(srgbRed: 0.30, green: 0.87, blue: 0.55, alpha: 1),
-            NSColor(srgbRed: 0.03, green: 0.42, blue: 0.31, alpha: 1),
-        ])!
-        grad.draw(in: bg, angle: 135)
-
-        NSColor.white.setStroke()
-        let bp = NSBezierPath()
-        bp.lineWidth = 2.2
-        bp.lineCapStyle = .round
-        bp.lineJoinStyle = .round
-        let cx = d / 2
-        // 双层下冲箭头（快进朝下 = 疾速下载），与 App 图标同构
-        bp.move(to: NSPoint(x: cx - 5.0, y: 13.4))
-        bp.line(to: NSPoint(x: cx, y: 9.6))
-        bp.line(to: NSPoint(x: cx + 5.0, y: 13.4))
-        bp.move(to: NSPoint(x: cx - 5.0, y: 8.4))
-        bp.line(to: NSPoint(x: cx, y: 4.6))
-        bp.line(to: NSPoint(x: cx + 5.0, y: 8.4))
-        bp.stroke()
+        let appIcon = NSApp.applicationIconImage
+        let s = appIcon.size
+        let from = NSRect(x: s.width * 0.098, y: s.height * 0.098,
+                          width: s.width * 0.804, height: s.height * 0.804)
+        appIcon.draw(in: NSRect(x: 0, y: 0, width: d, height: d),
+                     from: from, operation: .sourceOver, fraction: 1)
 
         return img
     }
