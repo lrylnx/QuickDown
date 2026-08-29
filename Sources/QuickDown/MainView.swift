@@ -6,6 +6,7 @@ import QuickDownCore
 struct MainView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.colorScheme) private var scheme
+    @State private var showClearConfirm = false
 
     /// 内容区背景：深色模式比侧栏更暗一档形成层次；
     /// 浅色模式 underPageBackground 是中灰、过重，改用与侧栏一致的窗口底色
@@ -87,10 +88,19 @@ struct MainView: View {
                     .padding(.vertical, 2)
                     .background(Capsule().fill(Color.primary.opacity(0.07)))
                 Spacer()
+                if !model.records.isEmpty {
+                    ClearListButton { showClearConfirm = true }
+                }
             }
             .padding(.horizontal, 18)
             .padding(.top, 12)
             .padding(.bottom, 9)
+            .alert("清空下载列表", isPresented: $showClearConfirm) {
+                Button("清空", role: .destructive) { model.clearAll() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("将移除全部任务记录，进行中的任务会停止；不会删除已下载的文件。")
+            }
 
             ScrollView {
                 LazyVStack(spacing: 2) {
@@ -210,6 +220,30 @@ struct MainView: View {
             if !name.isEmpty {
                 model.rename(rec.id, to: name)
             }
+        }
+    }
+}
+
+// MARK: - 清空列表按钮
+
+/// 侧栏头部的小型垃圾桶按钮：悬停变红提示危险操作
+private struct ClearListButton: View {
+    var action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "trash")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(hovering ? Color.red : .secondary)
+                .padding(4)
+                .background(Capsule().fill(Color.primary.opacity(hovering ? 0.08 : 0)))
+        }
+        .buttonStyle(.plain)
+        .help("清空列表")
+        .onHover { hover in
+            hovering = hover
+            if hover { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
         }
     }
 }

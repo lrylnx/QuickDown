@@ -216,6 +216,12 @@ final class AppModel: ObservableObject {
     func resumeAll() { manager.resumeAll() }
     func removeCompleted() { manager.removeCompleted() }
 
+    /// 清空列表：停止并移除全部任务记录（不删除已下载的文件）
+    func clearAll() {
+        for id in records.map(\.id) { manager.cancel(id) }
+        selectedID = nil
+    }
+
     func revealInFinder(_ rec: DownloadRecord) {
         let path: String
         if let finalPath = rec.finalPath, FileManager.default.fileExists(atPath: finalPath) {

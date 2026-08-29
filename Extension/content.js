@@ -12,6 +12,8 @@
   let hoverBtn = null;
   let hoveredVideo = null;
   let lastMoveAt = 0;
+  let lastActivityAt = 0;              // 最近一次鼠标/页面活动时间（闲置自动隐藏用）
+  const IDLE_HIDE_MS = 3000;           // 鼠标静止超过 3 秒自动隐藏按钮
   const sizeCache = new Map();         // url -> number|null（探测失败也缓存）
 
   function guessName(url) {
@@ -156,6 +158,7 @@
 
   function onMove(e) {
     const now = performance.now();
+    lastActivityAt = now;
     if (now - lastMoveAt < 60) return;
     lastMoveAt = now;
     if (document.fullscreenElement) { hideBtn(); return; } // 全屏时不出按钮
@@ -212,6 +215,7 @@
   document.addEventListener("mousemove", onMove, { capture: true, passive: true });
   // 滚动时视频位置变化：仍悬停则跟随，否则隐藏
   document.addEventListener("scroll", () => {
+    lastActivityAt = performance.now(); // 页面滚动视为活动（鼠标不动但内容在动）
     if (!hoveredVideo || !hoverBtn || hoverBtn.style.display === "none") return;
     const r = hoveredVideo.getBoundingClientRect();
     if (r.width < MIN_W || r.height < MIN_H || r.bottom < 0 || r.top > window.innerHeight) {
@@ -222,12 +226,18 @@
   }, { capture: true, passive: true });
   // 进入全屏立即隐藏
   document.addEventListener("fullscreenchange", hideBtn, { capture: true });
-  // 兜底：视频被移除/隐藏时清掉按钮（鼠标不动 mousemove 不触发的场景）
+  // 兜底：视频被移除/隐藏、进入全屏、鼠标静止过久时清掉按钮
   setInterval(() => {
     if (!hoveredVideo || !hoverBtn || hoverBtn.style.display === "none") return;
+    if (document.fullscreenElement ||
+        performance.now() - lastActivityAt > IDLE_HIDE_MS) {
+      // 鼠标静止超过 3 秒自动隐藏（覆盖视频铺满整个网页、鼠标始终「在视频上」
+      // 的网页全屏场景）；鼠标重新移动会经 onMove 重新显示
+      hideBtn();
+      return;
+    }
     const r = hoveredVideo.getBoundingClientRect();
-    if (!hoveredVideo.isConnected || r.width < MIN_W || r.height < MIN_H ||
-        document.fullscreenElement) {
+    if (!hoveredVideo.isConnected || r.width < MIN_W || r.height < MIN_H) {
       hideBtn();
     }
   }, 1000);
