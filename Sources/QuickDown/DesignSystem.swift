@@ -6,13 +6,13 @@ import QuickDownCore
 // 统一品牌色与材质：跟随系统强调色，深浅色模式自动适配。
 
 enum QDTheme {
-    /// 品牌主色（速下绿，与 App 图标 / 扩展 / 菜单栏图标同色系）
-    static let accent = Color(red: 0.16, green: 0.65, blue: 0.36)
+    /// 品牌主色（速下绿：低饱和薄荷绿，取自 App 图标背景色的中间调）
+    static let accent = Color(red: 0.36, green: 0.70, blue: 0.50)
 
-    /// 品牌渐变（亮翠绿 → 品牌绿，与图标同款对角渐变）
+    /// 品牌渐变（与图标同色系的淡雅薄荷绿，上浅下深）
     static let accentGradient = LinearGradient(
-        colors: [Color(red: 0.31, green: 0.78, blue: 0.47),
-                 Color(red: 0.11, green: 0.55, blue: 0.31)],
+        colors: [Color(red: 0.48, green: 0.78, blue: 0.61),
+                 Color(red: 0.27, green: 0.63, blue: 0.42)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing)
 
