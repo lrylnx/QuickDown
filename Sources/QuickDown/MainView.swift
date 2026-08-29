@@ -428,7 +428,7 @@ struct DownloadRow: View {
     }
 
     private var backgroundColor: Color {
-        if isSelected { return Color.accentColor.opacity(0.14) }
+        if isSelected { return QDTheme.accent.opacity(0.14) }
         // 窗口非焦点时不显示悬停色：失焦瞬间收不到 mouseExited，会有整行残留
         if hovering, controlActiveState == .active { return Color.primary.opacity(0.07) }
         return .clear

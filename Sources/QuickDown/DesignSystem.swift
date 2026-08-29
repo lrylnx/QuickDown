@@ -6,13 +6,13 @@ import QuickDownCore
 // 统一品牌色与材质：跟随系统强调色，深浅色模式自动适配。
 
 enum QDTheme {
-    /// 品牌主色（跟随系统强调色，保持原生观感）
-    static let accent = Color.accentColor
+    /// 品牌主色（速下绿，与 App 图标 / 扩展 / 菜单栏图标同色系）
+    static let accent = Color(red: 0.16, green: 0.65, blue: 0.36)
 
-    /// 品牌渐变（强调色 → 靛紫）
+    /// 品牌渐变（亮翠绿 → 品牌绿，与图标同款对角渐变）
     static let accentGradient = LinearGradient(
-        colors: [accent,
-                 Color(red: 0.45, green: 0.42, blue: 0.96)],
+        colors: [Color(red: 0.31, green: 0.78, blue: 0.47),
+                 Color(red: 0.11, green: 0.55, blue: 0.31)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing)
 
@@ -63,7 +63,7 @@ extension DownloadStatus {
     var color: Color {
         switch self {
         case .queued:      return .secondary
-        case .connecting:  return .blue
+        case .connecting:  return .teal
         case .downloading: return QDTheme.accent
         case .paused:      return .orange
         case .completed:   return .green
