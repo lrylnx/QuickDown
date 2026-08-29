@@ -56,12 +56,13 @@ final class StatusItemController: NSObject {
         img.lockFocus()
         defer { img.unlockFocus() }
 
-        let appIcon = NSApp.applicationIconImage
-        let s = appIcon.size
-        let from = NSRect(x: s.width * 0.098, y: s.height * 0.098,
-                          width: s.width * 0.804, height: s.height * 0.804)
-        appIcon.draw(in: NSRect(x: 0, y: 0, width: d, height: d),
-                     from: from, operation: .sourceOver, fraction: 1)
+        if let appIcon = NSApp.applicationIconImage {
+            let s = appIcon.size
+            let from = NSRect(x: s.width * 0.098, y: s.height * 0.098,
+                              width: s.width * 0.804, height: s.height * 0.804)
+            appIcon.draw(in: NSRect(x: 0, y: 0, width: d, height: d),
+                         from: from, operation: .sourceOver, fraction: 1)
+        }
 
         return img
     }
