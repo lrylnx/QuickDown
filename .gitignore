@@ -21,3 +21,7 @@ Scripts/crx/key.pem
 
 # 升级刷新脚本可能误拷进源码目录的产物
 Extension/BrowserExtension.crx
+
+# 本地草稿（论坛文案等，不入库）
+本地文档/
+论坛*.md
