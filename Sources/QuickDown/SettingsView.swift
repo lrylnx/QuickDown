@@ -60,7 +60,7 @@ struct SettingsView: View {
 enum AppVersion {
     static let current: String = {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return (v?.isEmpty == false) ? v! : "1.4.0"
+        return (v?.isEmpty == false) ? v! : "1.4.1"
     }()
 }
 
