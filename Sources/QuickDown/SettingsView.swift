@@ -65,7 +65,7 @@ enum AppVersion {
 }
 
 struct AboutSettingsView: View {
-    private let repoURL = URL(string: "https://github.com/lrylnx/zxwzz")!
+    private let repoURL = URL(string: "https://github.com/lrylnx/QuickDown")!
 
     var body: some View {
         VStack(spacing: 10) {
@@ -90,7 +90,7 @@ struct AboutSettingsView: View {
             HStack(spacing: 4) {
                 Image(systemName: "link")
                     .font(.caption)
-                Link("GitHub 源码与更新：github.com/lrylnx/zxwzz", destination: repoURL)
+                Link("GitHub 源码与更新：github.com/lrylnx/QuickDown", destination: repoURL)
                     .font(.caption)
             }
             Text("MIT 开源许可 · 全中文界面 · 安装包仅约 2MB")
