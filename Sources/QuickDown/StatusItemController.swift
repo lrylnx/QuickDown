@@ -14,7 +14,6 @@ final class StatusItemController: NSObject {
     private weak var model: AppModel?
     private var openWindowAction: (() -> Void)?
     private var openConfirmWindowAction: (() -> Void)?
-    private var accessoryRestoreObserver: (any NSObjectProtocol)?
 
     func setup(model: AppModel) {
         self.model = model
@@ -49,7 +48,7 @@ final class StatusItemController: NSObject {
         }
     }
 
-    /// 绘制菜单栏图标（彩色版）：与 App 图标同风格 —— 蓝靛渐变圆角底 + 白色圆润下箭头
+    /// 绘制菜单栏图标（彩色版）：与 App 图标同风格 —— 翠绿渐变圆角底 + 白色双层下冲箭头
     private func makeStatusImage() -> NSImage {
         let d: CGFloat = 18
         let img = NSImage(size: NSSize(width: d, height: d))
@@ -59,29 +58,30 @@ final class StatusItemController: NSObject {
         let rect = NSRect(x: 0, y: 0, width: d, height: d)
         let bg = NSBezierPath(roundedRect: rect, xRadius: d * 0.30, yRadius: d * 0.30)
         let grad = NSGradient(colors: [
-            NSColor(srgbRed: 0.22, green: 0.44, blue: 0.98, alpha: 1),
-            NSColor(srgbRed: 0.55, green: 0.38, blue: 0.95, alpha: 1),
+            NSColor(srgbRed: 0.30, green: 0.87, blue: 0.55, alpha: 1),
+            NSColor(srgbRed: 0.03, green: 0.42, blue: 0.31, alpha: 1),
         ])!
         grad.draw(in: bg, angle: 135)
 
         NSColor.white.setStroke()
         let bp = NSBezierPath()
-        bp.lineWidth = 3.0
+        bp.lineWidth = 2.2
         bp.lineCapStyle = .round
         bp.lineJoinStyle = .round
         let cx = d / 2
-        bp.move(to: NSPoint(x: cx, y: 14.0))
-        bp.line(to: NSPoint(x: cx, y: 9.2))
-        bp.move(to: NSPoint(x: cx - 4.4, y: 9.2))
-        bp.line(to: NSPoint(x: cx, y: 3.8))
-        bp.move(to: NSPoint(x: cx + 4.4, y: 9.2))
-        bp.line(to: NSPoint(x: cx, y: 3.8))
+        // 双层下冲箭头（快进朝下 = 疾速下载），与 App 图标同构
+        bp.move(to: NSPoint(x: cx - 5.0, y: 13.4))
+        bp.line(to: NSPoint(x: cx, y: 9.6))
+        bp.line(to: NSPoint(x: cx + 5.0, y: 13.4))
+        bp.move(to: NSPoint(x: cx - 5.0, y: 8.4))
+        bp.line(to: NSPoint(x: cx, y: 4.6))
+        bp.line(to: NSPoint(x: cx + 5.0, y: 8.4))
         bp.stroke()
 
         return img
     }
 
-    /// 绘制菜单栏图标（黑白版）：下载箭头 + 托盘双元素，撑满 18pt 画布，
+    /// 绘制菜单栏图标（黑白版）：双层下冲箭头撑满 18pt 画布，
     /// 模板图只取 alpha、颜色由系统自动适配深浅菜单栏
     private func makeMonoStatusImage() -> NSImage {
         let d: CGFloat = 18
@@ -91,20 +91,17 @@ final class StatusItemController: NSObject {
 
         NSColor.black.setStroke()   // 模板图只取 alpha，实际颜色由系统决定
         let bp = NSBezierPath()
-        bp.lineWidth = 2.6
+        bp.lineWidth = 2.4
         bp.lineCapStyle = .round
         bp.lineJoinStyle = .round
         let cx = d / 2
-        // 箭头：杆从顶部到中部，两翼汇聚到下尖端
-        bp.move(to: NSPoint(x: cx, y: 15.4))
-        bp.line(to: NSPoint(x: cx, y: 9.2))
-        bp.move(to: NSPoint(x: cx - 4.3, y: 9.2))
-        bp.line(to: NSPoint(x: cx, y: 4.9))
-        bp.move(to: NSPoint(x: cx + 4.3, y: 9.2))
-        bp.line(to: NSPoint(x: cx, y: 4.9))
-        // 托盘：底部收纳线，与彩色版同构
-        bp.move(to: NSPoint(x: cx - 5.2, y: 2.4))
-        bp.line(to: NSPoint(x: cx + 5.2, y: 2.4))
+        // 双层下冲箭头：与彩色版同构
+        bp.move(to: NSPoint(x: cx - 5.4, y: 14.0))
+        bp.line(to: NSPoint(x: cx, y: 9.8))
+        bp.line(to: NSPoint(x: cx + 5.4, y: 14.0))
+        bp.move(to: NSPoint(x: cx - 5.4, y: 8.6))
+        bp.line(to: NSPoint(x: cx, y: 4.4))
+        bp.line(to: NSPoint(x: cx + 5.4, y: 8.6))
         bp.stroke()
 
         return img
@@ -167,27 +164,10 @@ final class StatusItemController: NSObject {
     }
 
     /// 把指定标题的窗口顶到所有应用前方（主窗口/确认窗口/设置窗口共用）。
-    /// 新版 macOS 的协作式激活会「有概率」拒绝后台菜单栏应用（LSUIElement）的
-    /// 焦点请求，导致窗口开在当前应用后面 —— 先临时切成常规应用确保拿到前台。
-    /// 注意：不能定时恢复 accessory 策略（那会让应用立刻失去焦点、窗口重新被
-    /// 压到后面，表现为「弹出 1 秒又消失」），改为等用户主动切走时再恢复。
+    /// 应用全程保持 accessory（LSUIElement，永不出现 Dock 图标）：
+    /// 配合 NSApp.activate + 短暂 .floating 置顶，保证窗口开在最前；
+    /// 若协作式激活没抢到焦点，窗口也会浮在最上层，点一下即成为前台窗口。
     private func popWindowToFront(titled title: String) {
-        let wasAccessory = NSApp.activationPolicy() == .accessory
-        if wasAccessory {
-            NSApp.setActivationPolicy(.regular)
-            if accessoryRestoreObserver == nil {
-                accessoryRestoreObserver = NotificationCenter.default.addObserver(
-                    forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
-                ) { [weak self] _ in
-                    guard let self else { return }
-                    NSApp.setActivationPolicy(.accessory)
-                    if let o = self.accessoryRestoreObserver {
-                        NotificationCenter.default.removeObserver(o)
-                        self.accessoryRestoreObserver = nil
-                    }
-                }
-            }
-        }
         NSApp.activate(ignoringOtherApps: true)
         guard let win = NSApp.windows.first(where: { $0.title == title }) else { return }
         win.makeKeyAndOrderFront(nil)

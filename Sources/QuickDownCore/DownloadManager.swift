@@ -77,8 +77,15 @@ public final class DownloadManager: @unchecked Sendable {
     @discardableResult
     public func add(_ request: NewDownloadRequest, autoStart: Bool = true) -> UUID {
         var filename = request.filename ?? ""
-        if filename.isEmpty, let url = URL(string: request.url) {
-            filename = FileNaming.filename(fromURL: url) ?? "download"
+        if let url = URL(string: request.url) {
+            let derived = FileNaming.filename(fromURL: url)
+            if filename.isEmpty {
+                filename = derived ?? "download"
+            } else if let derived, FileNaming.looksLikeDerived(filename, url: url) {
+                // 上游给的只是 URL 推导名（哈希名/通用名/路径末段）时，
+                // 用 URL 查询参数里的真实文件名纠正（蓝奏云等网盘 CDN）
+                filename = derived
+            }
         }
         if filename.isEmpty { filename = "download" }
         let directory = request.directory ?? settings.downloadDirectory

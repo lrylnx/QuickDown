@@ -30,6 +30,38 @@ final class FileNamingTests: XCTestCase {
         XCTAssertNil(FileNaming.filename(fromURL: URL(string: "https://a.com/")!))
     }
 
+    func testFilenameFromURLQuery() {
+        // 蓝奏云真实场景：路径是哈希名，真实文件名在 fileName= 查询参数里
+        let lanzou = URL(string:
+            "https://pdf2.webgetstore.com/2026/08/29/025fcd6c0ce08ed21e1257963be6fd3f.pkg" +
+            "?sg=29beda218fda51a7d46b339976bd88fe&e=6a927ae1" +
+            "&fileName=%E9%80%9F%E4%B8%8B%E4%B8%8B%E8%BD%BD%E7%AE%A1%E7%90%86%E5%99%A8-%E4%B8%80%E9%94%AE%E5%AE%89%E8%A3%851.30.pkg" +
+            "&fi=312722080")!
+        XCTAssertEqual(FileNaming.filename(fromURL: lanzou), "速下下载管理器-一键安装1.30.pkg")
+        // 大小写不敏感 & file_name 别名
+        let lower = URL(string: "https://a.com/x.bin?filename=setup.exe")!
+        XCTAssertEqual(FileNaming.filename(fromURL: lower), "setup.exe")
+        let snake = URL(string: "https://a.com/x.bin?file_name=tool.zip")!
+        XCTAssertEqual(FileNaming.filename(fromURL: snake), "tool.zip")
+        // 查询参数缺席时回退路径末段
+        let noQuery = URL(string: "https://a.com/dir/video.mp4?sg=abc&t=1")!
+        XCTAssertEqual(FileNaming.filename(fromURL: noQuery), "video.mp4")
+    }
+
+    func testLooksLikeDerived() {
+        let lanzou = URL(string:
+            "https://cdn.example.com/2026/025fcd6c0ce08ed21e1257963be6fd3f.pkg" +
+            "?fileName=%E9%80%9F%E4%B8%8B-%E4%B8%80%E9%94%AE%E5%AE%89%E8%A3%85.pkg")!
+        // 哈希名 / 与路径末段相同 / 通用名 / 空名 → 视为「URL 推导名」
+        XCTAssertTrue(FileNaming.looksLikeDerived("025fcd6c0ce08ed21e1257963be6fd3f.pkg", url: lanzou))
+        XCTAssertTrue(FileNaming.looksLikeDerived("", url: lanzou))
+        XCTAssertTrue(FileNaming.looksLikeDerived("file.bin", url: lanzou))
+        XCTAssertTrue(FileNaming.looksLikeDerived("download", url: lanzou))
+        // 真实名字（如 Content-Disposition 提供）→ 不覆盖
+        XCTAssertFalse(FileNaming.looksLikeDerived("安装器.pkg", url: lanzou))
+        XCTAssertFalse(FileNaming.looksLikeDerived("installer.pkg", url: lanzou))
+    }
+
     func testSanitize() {
         XCTAssertEqual(FileNaming.sanitize("a/b\\c:d"), "a_b_c_d")
         XCTAssertEqual(FileNaming.sanitize(".hidden"), "hidden")

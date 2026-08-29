@@ -48,6 +48,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 说明：应用以菜单栏应用运行（Info.plist LSUIElement=true，无 Dock 图标）。
     // 菜单栏图标由 StatusItemController 管理：左键打开主界面，右键菜单。
 
+    /// 启动即固定为 accessory（纯菜单栏应用）：全程不出现 Dock 图标、
+    /// 不出现在 Cmd+Tab 里，只能通过右上角状态栏图标交互。
+    /// 显式设置一次，防止 SwiftUI 窗口场景生命周期带来的策略变化。
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+    }
+
     /// 关闭主窗口时只隐藏窗口，不退出应用（下载器需长期驻留菜单栏）。
     /// 自定义 NSStatusItem 对 SwiftUI 不可见，必须显式阻止「最后一个窗口关闭即终止」。
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

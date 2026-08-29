@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 PKG="$ROOT/dist/速下下载管理器-一键安装.pkg"
 BUILD_DIR="$ROOT/dist/pkg-build"
 

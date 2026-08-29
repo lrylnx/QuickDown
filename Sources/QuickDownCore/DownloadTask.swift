@@ -257,7 +257,8 @@ public final class DownloadTask: @unchecked Sendable {
         guard let url = URL(string: urlString) else { throw DownloadError.invalidURL }
         if url.isFileURL {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
-            return (ProbeInfo(totalSize: Int64(size ?? 0), acceptsRanges: false, filename: url.lastPathComponent), nil)
+            return (ProbeInfo(totalSize: Int64(size ?? 0), acceptsRanges: false,
+                              filename: FileNaming.filename(fromURL: url) ?? url.lastPathComponent), nil)
         }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             throw DownloadError.unsupportedScheme

@@ -184,6 +184,76 @@ async function flushQueue() {
 }
 
 // ============================================================================
+// 文件名推导
+// ============================================================================
+
+// 哈希名：MD5 32 位 / SHA1 40 位十六进制（蓝奏云等网盘 CDN 的路径名）
+function isHashName(name) {
+  const base = name.replace(/\.[^.]+$/, "");
+  return /^[0-9a-fA-F]{32}$/.test(base) || /^[0-9a-fA-F]{40}$/.test(base);
+}
+
+// 推导更可靠的文件名：
+// 浏览器在拿不到 Content-Disposition 时只会用 URL 路径末段兜底（如蓝奏云的
+// 025fcd6c….pkg），真实文件名往往藏在查询参数里（fileName=…）。
+// 规则：给定名是「空 / 哈希名 / 通用名 / URL 路径末段」之一，且 URL 查询参数
+// 带真实名时，用查询参数名覆盖；否则保留浏览器名（它可能来自 Content-Disposition）。
+function deriveFilename(item) {
+  const urlStr = item.finalUrl || item.url || "";
+  let queryName;
+  let pathBase = "";
+  try {
+    const u = new URL(urlStr);
+    for (const key of u.searchParams.keys()) {
+      if (key.toLowerCase() === "filename" || key.toLowerCase() === "file_name") {
+        const v = (u.searchParams.get(key) || "").trim();
+        if (v) { queryName = v; break; }
+      }
+    }
+    pathBase = decodeURIComponent(u.pathname.split("/").pop() || "");
+  } catch (e) {}
+
+  let provided = (item.filename || "").replace(/^.*[\\/]/, "").trim();
+  if (queryName && (!provided || provided === pathBase || isHashName(provided))) {
+    return queryName;
+  }
+  return provided || pathBase || "";
+}
+
+// ============================================================================
+// 视频大小探测（嗅探按钮显示 MB/GB 用）
+// ============================================================================
+
+const sizeCache = new Map(); // url -> { size, at }（失败也缓存，避免反复探测）
+
+async function probeVideoSize(url) {
+  const cached = sizeCache.get(url);
+  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.size;
+  let size = null;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 6000);
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: { Range: "bytes=0-0" },
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    if (resp.status === 206) {
+      const cr = resp.headers.get("content-range"); // bytes 0-0/总大小
+      const m = cr && cr.match(/\/(\d+)\s*$/);
+      if (m) size = parseInt(m[1], 10);
+    } else if (resp.ok) {
+      const cl = resp.headers.get("content-length");
+      if (cl) size = parseInt(cl, 10);
+    }
+    try { await resp.body?.cancel(); } catch (e) {}
+  } catch (e) {}
+  sizeCache.set(url, { size, at: Date.now() });
+  return size;
+}
+
+// ============================================================================
 // 交给速下
 // ============================================================================
 
@@ -308,10 +378,9 @@ async function takeOver(downloadItem, opts = {}) {
   const url = downloadItem.finalUrl || downloadItem.url;
   if (!markCaptured(downloadItem.id)) return;
 
-  const filename = downloadItem.filename || "";
   const payload = {
     url,
-    filename,
+    filename: deriveFilename(downloadItem),
     referer: downloadItem.referrer,
     userAgent: downloadItem.userAgent,
   };
@@ -395,7 +464,7 @@ const supportsDetermining = typeof chrome.downloads?.onDeterminingFilename?.addL
 function buildPayload(item) {
   return {
     url: item.finalUrl || item.url,
-    filename: item.filename || "",
+    filename: deriveFilename(item),
     referer: item.referrer,
     userAgent: item.userAgent,
   };
@@ -577,6 +646,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const tabId = sender.tab ? sender.tab.id : -1;
     sendResponse({ videos: tabVideos.get(tabId) || [] });
     return false;
+  }
+  if (msg && msg.type === "probeSize") {
+    probeVideoSize(msg.url).then((size) => sendResponse({ size }));
+    return true;
   }
   if (msg && msg.type === "downloadVideo") {
     const payload = {

@@ -19,6 +19,8 @@ struct SettingsView: View {
                 .tabItem { Label("代理", systemImage: "network") }
             AdvancedSettingsView(settings: $settings, loginItemStatus: $loginItemStatus, apply: apply)
                 .tabItem { Label("高级", systemImage: "slider.horizontal.3") }
+            AboutSettingsView()
+                .tabItem { Label("关于", systemImage: "info.circle") }
         }
         .frame(width: 520, height: 440)
         .onAppear {
@@ -49,6 +51,55 @@ struct SettingsView: View {
         SettingsStore.shared.update { $0 = fm }
         model.applySettings()
         refreshLoginStatus()
+    }
+}
+
+// MARK: - 关于
+
+/// 版本号：从 App Bundle 读取（CFBundleShortVersionString），与 Info.plist 单一来源保持一致
+enum AppVersion {
+    static let current: String = {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return (v?.isEmpty == false) ? v! : "1.4.0"
+    }()
+}
+
+struct AboutSettingsView: View {
+    private let repoURL = URL(string: "https://github.com/lrylnx/zxwzz")!
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 96, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+            Text("速下 QuickDown")
+                .font(.title2.bold())
+            Text("版本 \(AppVersion.current)")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("轻量、原生的 macOS 下载管理器：多线程分段加速、断点续传、网页视频嗅探、浏览器下载接管")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Divider()
+                .padding(.horizontal, 48)
+            HStack(spacing: 4) {
+                Image(systemName: "link")
+                    .font(.caption)
+                Link("GitHub 源码与更新：github.com/lrylnx/zxwzz", destination: repoURL)
+                    .font(.caption)
+            }
+            Text("MIT 开源许可 · 全中文界面 · 安装包仅约 2MB")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Spacer()
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
