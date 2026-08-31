@@ -22,6 +22,12 @@ public final class DownloadManager: @unchecked Sendable {
         self.settings = settings ?? SettingsStore.shared.settings
         self.store = store ?? DownloadStore.shared
         loadPersisted()
+        // 启动后清理下载目录里不属于任何任务的孤儿 .part 分片
+        // （上次退出时被中断/崩溃/记录被删但分片残留的临时文件）。
+        // 后台执行，避免拖慢启动；仅删除无主分片，不影响断点续传。
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.cleanupOrphanPartFiles()
+        }
         let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             // 静默优化：仅在有活动下载时周期保存进度（供断点恢复）；
@@ -164,7 +170,9 @@ public final class DownloadManager: @unchecked Sendable {
         startNext()
     }
 
-    /// 取消并删除记录；deleteFile 同时删除已下载文件
+    /// 取消并删除记录；deleteFile 同时删除已下载文件。
+    /// 无论该任务当前是否在运行（含已暂停/排队），都会一并清掉它自己的 .part 临时分片，
+    /// 避免取消后留下孤儿临时文件堆积。
     public func cancel(_ id: UUID, deleteFile: Bool = false) {
         lock.lock()
         let task = tasks.removeValue(forKey: id)
@@ -173,6 +181,8 @@ public final class DownloadManager: @unchecked Sendable {
         if let task { task.cancel() }
         if let box {
             let rec = box.record
+            Self.removePartFiles(directory: rec.directory, filename: rec.filename,
+                                 segments: rec.segments)
             if deleteFile {
                 if let p = rec.finalPath { try? FileManager.default.removeItem(atPath: p) }
             }
@@ -337,6 +347,54 @@ public final class DownloadManager: @unchecked Sendable {
         persist()
         notify()
         startNext()
+    }
+
+    // MARK: - 孤儿 .part 清理
+
+    /// 删除指定任务的全部 .part 临时分片（取消任务时调用）。
+    static func removePartFiles(directory: String, filename: String, segments: [SegmentState]) {
+        let fm = FileManager.default
+        for i in 0..<max(segments.count, 8) {
+            let part = FileNaming.partFileName(for: filename, index: i)
+            try? fm.removeItem(atPath: (directory as NSString).appendingPathComponent(part))
+        }
+    }
+
+    /// 扫描下载目录，删除不属于任何已知任务的孤儿 .part 分片。
+    /// 仅清理"有分片文件、但没有对应下载记录"的残留，正在下载/可续传任务的
+    /// 分片（文件名与目录均与记录匹配）会被保留。
+    public func cleanupOrphanPartFiles() {
+        let fm = FileManager.default
+        let dir = settings.downloadDirectory
+        guard !dir.isEmpty, fm.fileExists(atPath: dir),
+              let entries = try? fm.contentsOfDirectory(atPath: dir) else { return }
+
+        // 已知任务拥有的分片路径集合
+        lock.lock()
+        let owned: Set<String> = {
+            var s = Set<String>()
+            for box in boxes.values {
+                let rec = box.record
+                let segCount = max(rec.segments.count, 8)
+                for i in 0..<segCount {
+                    s.insert((rec.directory as NSString)
+                        .appendingPathComponent(FileNaming.partFileName(for: rec.filename, index: i)))
+                }
+            }
+            return s
+        }()
+        lock.unlock()
+
+        var deleted = 0
+        for entry in entries where FileNaming.parsePartFileName(entry) != nil {
+            let full = (dir as NSString).appendingPathComponent(entry)
+            if !owned.contains(full), (try? fm.removeItem(atPath: full)) != nil {
+                deleted += 1
+            }
+        }
+        if deleted > 0 {
+            NSLog("QuickDown: 启动清理孤儿 .part 分片 \(deleted) 个（目录: %@）", dir)
+        }
     }
 
     // MARK: - 持久化

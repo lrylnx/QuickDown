@@ -106,4 +106,16 @@ final class FileNamingTests: XCTestCase {
         seg.downloaded = 100
         XCTAssertEqual(seg.remaining, 0)
     }
+
+    func testParsePartFileName() {
+        // 常规：文件名含多个点，取末尾 .part
+        XCTAssertEqual(FileNaming.parsePartFileName(".WorkBuddy.dmg.part3")?.filename, "WorkBuddy.dmg")
+        XCTAssertEqual(FileNaming.parsePartFileName(".WorkBuddy.dmg.part3")?.index, 3)
+        XCTAssertEqual(FileNaming.parsePartFileName(".a28ac99f-466b-40bf-b023-a432e5372330.mp4.part7")?.index, 7)
+        // 非分片/隐藏文件不误判
+        XCTAssertNil(FileNaming.parsePartFileName(".DS_Store"))
+        XCTAssertNil(FileNaming.parsePartFileName(".localized"))
+        XCTAssertNil(FileNaming.parsePartFileName("normal.txt"))
+        XCTAssertNil(FileNaming.parsePartFileName(".part3")) // 无文件名部分
+    }
 }

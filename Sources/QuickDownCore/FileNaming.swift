@@ -123,4 +123,18 @@ public enum FileNaming {
     public static func partFileName(for finalName: String, index: Int) -> String {
         ".\(finalName).part\(index)"
     }
+
+    /// 解析一个 `.part` 分片临时文件名，返回其对应的目标文件名与分段序号。
+    /// 形如 `.WorkBuddy.dmg.part3` → (filename: "WorkBuddy.dmg", index: 3)。
+    /// 非 QuickDown 分片格式（如 `.DS_Store`、普通文件）返回 nil。
+    public static func parsePartFileName(_ name: String) -> (filename: String, index: Int)? {
+        guard name.hasPrefix(".") else { return nil }
+        // 文件名本身可能含 `.`（如 `foo.bar.dmg.part2`），故从末尾找最后一个 `.part`
+        guard let range = name.range(of: ".part", options: .backwards) else { return nil }
+        guard range.lowerBound > name.startIndex else { return nil } // 无文件名部分，如 `.part3`
+        guard let idx = Int(String(name[range.upperBound...])) else { return nil }
+        let filename = String(name[name.index(after: name.startIndex)..<range.lowerBound])
+        guard !filename.isEmpty else { return nil }
+        return (filename, idx)
+    }
 }

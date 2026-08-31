@@ -166,4 +166,49 @@ final class DownloadIntegrationTests: XCTestCase {
         let reloaded = DownloadStore(fileURL: store.fileURL).load()
         XCTAssertTrue(reloaded.contains { $0.id == id })
     }
+
+    // MARK: - 孤儿 .part 清理
+
+    func testOrphanPartCleanup() {
+        let fm = FileManager.default
+        let orphan1 = tempDir.appendingPathComponent(".orphan-a.dmg.part0").path
+        let orphan2 = tempDir.appendingPathComponent(".orphan-b.mp4.part3").path
+        let dsStore = tempDir.appendingPathComponent(".DS_Store").path
+        fm.createFile(atPath: orphan1, contents: Data(count: 10))
+        fm.createFile(atPath: orphan2, contents: Data(count: 10))
+        fm.createFile(atPath: dsStore, contents: Data(count: 10))
+
+        // 有主任务的分片应被保留：加入一个暂停任务并预置它的分片
+        let id = manager.add(NewDownloadRequest(
+            url: "http://example.com/keep.bin",
+            filename: "keep.bin",
+            directory: tempDir.path
+        ), autoStart: false)
+        XCTAssertNotNil(id)
+        let ownedPart = tempDir.appendingPathComponent(".keep.bin.part0").path
+        fm.createFile(atPath: ownedPart, contents: Data(count: 10))
+
+        manager.cleanupOrphanPartFiles()
+
+        XCTAssertFalse(fm.fileExists(atPath: orphan1), "无主分片应被清理")
+        XCTAssertFalse(fm.fileExists(atPath: orphan2), "无主分片应被清理")
+        XCTAssertTrue(fm.fileExists(atPath: ownedPart), "属于现有任务的分片应保留（断点续传）")
+        XCTAssertTrue(fm.fileExists(atPath: dsStore), ".DS_Store 等非分片文件不应被误删")
+    }
+
+    func testCancelRemovesOwnParts() {
+        let fm = FileManager.default
+        // 预置一个暂停任务（无运行中 task）对应的分片，取消时应被清掉
+        let id = manager.add(NewDownloadRequest(
+            url: "http://example.com/tmp.bin",
+            filename: "tmp.bin",
+            directory: tempDir.path
+        ), autoStart: false)
+        let part0 = tempDir.appendingPathComponent(".tmp.bin.part0").path
+        fm.createFile(atPath: part0, contents: Data(count: 10))
+
+        manager.cancel(id)
+
+        XCTAssertFalse(fm.fileExists(atPath: part0), "取消任务后应清掉自己的 .part 分片")
+    }
 }
