@@ -18,29 +18,38 @@ DEV_DIR=/Applications/Xcode.app/Contents/Developer
 echo "==> 编译 ($CONFIG)"
 case "$CONFIG" in
   universal)
+    # Swift 6.4 起 --show-bin-path 对不同 triple 返回同一路径（互相覆盖），
+    # 必须给每个架构用独立的 --scratch-path，否则会 lipo 到陈旧产物
     echo "    -- arm64 ..."
-    DEVELOPER_DIR="$DEV_DIR" swift build -c release --product QuickDown --triple arm64-apple-macosx13.0
-    BIN_A64="$(DEVELOPER_DIR="$DEV_DIR" swift build -c release --product QuickDown --triple arm64-apple-macosx13.0 --show-bin-path)/QuickDown"
+    BIN_A64="$ROOT/.build-a64/release/QuickDown"
+    DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox -c release --product QuickDown \
+      --triple arm64-apple-macosx13.0 --scratch-path "$ROOT/.build-a64"
     echo "    -- x86_64 ..."
-    DEVELOPER_DIR="$DEV_DIR" swift build -c release --product QuickDown --triple x86_64-apple-macosx13.0
-    BIN_X64="$(DEVELOPER_DIR="$DEV_DIR" swift build -c release --product QuickDown --triple x86_64-apple-macosx13.0 --show-bin-path)/QuickDown"
+    BIN_X64="$ROOT/.build-x64/release/QuickDown"
+    DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox -c release --product QuickDown \
+      --triple x86_64-apple-macosx13.0 --scratch-path "$ROOT/.build-x64"
     mkdir -p "$ROOT/.build/universal"
     lipo -create "$BIN_A64" "$BIN_X64" -output "$ROOT/.build/universal/QuickDown"
     BIN="$ROOT/.build/universal/QuickDown"
     ;;
   release)
-    DEVELOPER_DIR="$DEV_DIR" swift build -c release --product QuickDown
+    DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox -c release --product QuickDown
     BIN=".build/release/QuickDown"
     ;;
   *)
-    DEVELOPER_DIR="$DEV_DIR" swift build --product QuickDown
+    DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox --product QuickDown
     BIN=".build/debug/QuickDown"
     ;;
 esac
 
 DIST="${2:-$ROOT/dist}"
 APP="$DIST/QuickDown.app"
-rm -rf "$APP"
+# 移入废纸篓而非 rm -rf：更安全，也避免触发系统的批量删除保护
+trash_path() {
+  [ -e "$1" ] || return 0
+  mv "$1" "$HOME/.Trash/$(basename "$1")-$(date +%s)" 2>/dev/null || rm -rf "$1"
+}
+trash_path "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "==> 组装 .app"

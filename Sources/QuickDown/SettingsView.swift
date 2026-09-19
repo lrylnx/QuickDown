@@ -60,7 +60,7 @@ struct SettingsView: View {
 enum AppVersion {
     static let current: String = {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return (v?.isEmpty == false) ? v! : "1.4.1"
+        return (v?.isEmpty == false) ? v! : "1.5.0"
     }()
 }
 
@@ -325,6 +325,22 @@ struct ExtensionSettingsView: View {
                 .help("浏览器下载被接管时，自动跳到速下窗口查看进度")
             Toggle("接管下载后先确认再下载", isOn: $settings.confirmOnCapture)
                 .help("接管后弹出确认窗口：可重命名文件、选择保存位置，点击「开始下载」或「取消」")
+
+            QDDivider()
+
+            Toggle("网页视频嗅探", isOn: Binding(
+                get: { settings.sniffEnabled },
+                set: { newValue in
+                    settings.sniffEnabled = newValue
+                    // 即时生效并保存，扩展每 30 秒自动同步（重启速下后仍保留）
+                    SettingsStore.shared.update { $0.sniffEnabled = newValue }
+                }
+            ))
+            .help("总开关：控制浏览器里的视频嗅探功能（悬浮下载按钮 / 右键「嗅探本页视频」）")
+            Text("关闭后浏览器不再出现视频嗅探相关功能（扩展最长 30 秒内同步），下载接管不受影响。扩展弹窗和扩展选项页里也有独立的嗅探开关，两者任一关闭即关闭。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             QDDivider()
 

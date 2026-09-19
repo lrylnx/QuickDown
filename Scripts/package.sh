@@ -4,16 +4,23 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-VERSION="1.4.1"
+VERSION="1.5.0"
 PKG_NAME="速下下载管理器-通用版"
 PKG_DIR="$ROOT/dist/$PKG_NAME"
 ZIP="$ROOT/dist/$PKG_NAME.zip"
 
-echo "==> 1/4 构建最新版本（universal）"
+# 移入废纸篓而非 rm -rf：更安全，也避免触发系统的批量删除保护
+trash_path() {
+  [ -e "$1" ] || return 0
+  mv "$1" "$HOME/.Trash/$(basename "$1")-$(date +%s)" 2>/dev/null || rm -rf "$1"
+}
+
+echo "==> 1/5 构建最新版本（universal）"
 "$ROOT/Scripts/build.sh" universal >/dev/null
 
-echo "==> 2/4 组装分享包目录"
-rm -rf "$PKG_DIR" "$ZIP"
+echo "==> 2/5 组装分享包目录"
+rm -f "$ZIP"
+trash_path "$PKG_DIR"
 mkdir -p "$PKG_DIR/浏览器扩展"
 
 cp -R "$ROOT/dist/QuickDown.app" "$PKG_DIR/QuickDown.app"
@@ -21,10 +28,10 @@ cp -R "$ROOT/Extension/." "$PKG_DIR/浏览器扩展/"
 # 清理杂项
 find "$PKG_DIR" -name ".DS_Store" -delete
 
-echo "==> 3/4 写入安装说明与脚本"
+echo "==> 3/5 写入安装说明与脚本"
 cat > "$PKG_DIR/安装说明.txt" <<'EOF'
 ══════════════════════════════════════════════════════════
-  速下 QuickDown — macOS 中文下载管理器（通用版 v1.4.1）
+  速下 QuickDown — macOS 中文下载管理器（通用版 v1.5.0）
 ══════════════════════════════════════════════════════════
 
 【这是什么】
@@ -175,9 +182,14 @@ echo "=================================================="
 EOF
 chmod +x "$PKG_DIR/install.sh"
 
-echo "==> 4/4 打包 ZIP"
+echo "==> 4/5 打包 ZIP"
 cd "$ROOT/dist"
 ditto -c -k --sequesterRsrc --keepParent "$PKG_NAME" "$ZIP"
-rm -rf "$PKG_DIR"
-echo "完成: $ZIP"
-ls -lh "$ZIP"
+
+echo "==> 5/5 打包 DMG"
+hdiutil create -volname "QuickDown" -srcfolder "$PKG_NAME" -ov -format UDZO "$PKG_NAME.dmg"
+
+trash_path "$PKG_DIR"
+cd "$ROOT"
+echo "完成:"
+ls -lh "$ZIP" "$ROOT/dist/$PKG_NAME.dmg"

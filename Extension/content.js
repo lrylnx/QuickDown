@@ -5,7 +5,7 @@
 (() => {
   if (location.protocol !== "http:" && location.protocol !== "https:") return;
 
-  const VIDEO_URL_RE = /\.(m3u8|ts|mp4|flv|webm|mkv|mov|m4v|m4s|aac|mp3)(\?|#|$)/i;
+  const VIDEO_URL_RE = /\.(m3u8|ts|mp4|flv|webm|mkv|mov|m4v|m4s|aac|mp3)(\?|&|#|$)/i;
   const TOP = window.top === window;   // 列表面板只在顶层页面
   const MIN_W = 160, MIN_H = 100;      // 小于该尺寸的 video 视为贴片/装饰，不出按钮
 
@@ -15,6 +15,24 @@
   let lastActivityAt = 0;              // 最近一次鼠标/页面活动时间（闲置自动隐藏用）
   const IDLE_HIDE_MS = 3000;           // 鼠标静止超过 3 秒自动隐藏按钮
   const sizeCache = new Map();         // url -> number|null（探测失败也缓存）
+
+  // 视频嗅探开关（双层）：App 总开关（sniffApp）+ 扩展开关（sniff），任一关闭即关闭
+  let sniffEnabled = true;
+  let sniffAppEnabled = true;
+  function refreshSniffState(s) {
+    if ("sniff" in s) sniffEnabled = s.sniff !== false;
+    if ("sniffApp" in s) sniffAppEnabled = s.sniffApp !== false;
+    if (!sniffEnabled || !sniffAppEnabled) hideBtn();
+  }
+  chrome.storage.sync.get({ sniff: true, sniffApp: true }, refreshSniffState);
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "sync" && ("sniff" in changes || "sniffApp" in changes)) {
+      const patch = {};
+      if ("sniff" in changes) patch.sniff = changes.sniff.newValue;
+      if ("sniffApp" in changes) patch.sniffApp = changes.sniffApp.newValue;
+      refreshSniffState(patch);
+    }
+  });
 
   function guessName(url) {
     try {
@@ -82,7 +100,7 @@
   async function sizeOf(v) {
     let url = v.currentSrc || v.src || "";
     if (!url.startsWith("http")) return undefined;
-    if (/\.m3u8(\?|#|$)/i.test(url)) return undefined;
+    if (/\.m3u8(\?|&|#|$)/i.test(url)) return undefined;
     if (sizeCache.has(url)) return sizeCache.get(url);
     let size = null;
     try {
@@ -95,7 +113,7 @@
 
   function isHlsVideo(v) {
     const url = v.currentSrc || v.src || "";
-    if (/\.m3u8(\?|#|$)/i.test(url)) return true;
+    if (/\.m3u8(\?|&|#|$)/i.test(url)) return true;
     return url.startsWith("blob:"); // MSE（hls.js 等）基本都是 m3u8 流
   }
 
@@ -159,6 +177,7 @@
   function onMove(e) {
     const now = performance.now();
     lastActivityAt = now;
+    if (!sniffEnabled || !sniffAppEnabled) return; // 嗅探已关闭：不出悬浮按钮
     if (now - lastMoveAt < 60) return;
     lastMoveAt = now;
     if (document.fullscreenElement) { hideBtn(); return; } // 全屏时不出按钮
@@ -175,18 +194,18 @@
   async function pickUrl(v) {
     let url = v.currentSrc || v.src || "";
     if (url.startsWith("http")) return url;
+    // blob:（MSE）拿不到真实地址 → 合并后台捕获 + 页面 DOM/脚本扫描
+    const cand = scanDom();
     try {
       const resp = await chrome.runtime.sendMessage({ type: "getVideos" });
-      const list = (resp && resp.videos) || [];
-      if (!list.length) return null;
-      const score = (u) =>
-        (/\.m3u8(\?|#|$)/i.test(u) ? 3 : /\.(mp4|webm|mkv|mov|m4v|flv)(\?|#|$)/i.test(u) ? 2 : 1);
-      const items = list.map((x) => (typeof x === "string" ? { url: x } : x));
-      items.sort((a, b) => score(b.url) - score(a.url));
-      return items[0].url || null;
-    } catch (e) {
-      return null;
-    }
+      ((resp && resp.videos) || []).forEach((x) => {
+        cand.push(typeof x === "string" ? x : x.url);
+      });
+    } catch (e) {}
+    const score = (u) =>
+      (/\.m3u8(\?|&|#|$)/i.test(u) ? 3 : /\.(mp4|webm|mkv|mov|m4v|flv)(\?|&|#|$)/i.test(u) ? 2 : 1);
+    cand.sort((a, b) => score(b) - score(a));
+    return cand[0] || null;
   }
 
   async function downloadHovered(v) {
@@ -199,7 +218,7 @@
       setTimeout(() => { if (hoveredVideo) renderBtn(hoveredVideo); }, 1500);
       return;
     }
-    const isHls = /\.m3u8(\?|#|$)/i.test(url);
+    const isHls = /\.m3u8(\?|&|#|$)/i.test(url);
     const filename = isHls
       ? (document.title || "video").replace(/[\\/:*?"<>|\n]/g, "_").trim().slice(0, 60) + ".mp4"
       : guessName(url);
@@ -266,6 +285,14 @@
         if (VIDEO_URL_RE.test(e.name)) found.push(e.name);
       });
     } catch (e) {}
+    // 页面内嵌脚本里的直链（影视站常见写法：player_aaaa={"url":"...m3u8"}）
+    document.querySelectorAll("script").forEach((s) => {
+      const t = s.textContent || "";
+      if (!t || t.length > 300000) return;
+      const re = /https?:\/\/[^\s"'<>\\]+?\.(?:m3u8|mp4|flv)(?:\?[^\s"'<>\\]*)?/gi;
+      let m;
+      while ((m = re.exec(t)) && found.length < 50) found.push(m[0]);
+    });
     return found;
   }
 
@@ -279,7 +306,9 @@
         if (url) map.set(url, url);
       });
     } catch (e) {}
-    return [...map.keys()];
+    const score = (u) =>
+      (/\.m3u8(\?|&|#|$)/i.test(u) ? 3 : /\.(mp4|webm|mkv|mov|m4v|flv)(\?|&|#|$)/i.test(u) ? 2 : /\.ts(\?|&|#|$)/i.test(u) ? 0 : 1);
+    return [...map.keys()].sort((a, b) => score(b) - score(a));
   }
 
   function ensureRoot() {
@@ -380,10 +409,11 @@
     renderPanel();
   }
 
-  // 右键菜单「嗅探本页视频」→ 打开面板
+  // 右键菜单「嗅探本页视频」→ 打开面板（嗅探已关闭时忽略）
   if (TOP) {
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg && msg.type === "showPanel") {
+        if (!sniffEnabled || !sniffAppEnabled) return;
         openPanel();
       }
     });

@@ -402,13 +402,25 @@ public final class HLSDownloadTask: @unchecked Sendable {
                             }
                             out = decrypted
                         }
+                        // TS 流清洗：剔除广告/防盗链假分片（图片等），裁掉包头前的脏数据。
+                        // 脏数据会破坏 AVAsset 解析，导致最终 TS→MP4 转封装失败。
+                        if !playlist.isFragmentedMP4 {
+                            guard let cleaned = HLSDownloadTask.sanitizeTS(out) else {
+                                return (seg.index, Data()) // 整段无效 → 跳过
+                            }
+                            out = cleaned
+                        }
                         return (seg.index, out)
                     }
                 }
                 for try await (idx, data) in group {
-                    let segURL = tmp.appendingPathComponent("seg-\(idx)")
-                    try data.write(to: segURL)
-                    segmentSizes[idx] = Int64(data.count)
+                    if !data.isEmpty {
+                        let segURL = tmp.appendingPathComponent("seg-\(idx)")
+                        try data.write(to: segURL)
+                        segmentSizes[idx] = Int64(data.count)
+                    } else {
+                        segmentSizes[idx] = 0 // 无效分片，合并时跳过
+                    }
                     finished += 1
                     downloadedBytesTotal += Int64(data.count)
                     // 估计总大小：用已完成分片的平均大小
@@ -448,12 +460,13 @@ public final class HLSDownloadTask: @unchecked Sendable {
                 }
             }
         } else {
-            // TS：拼接后转封装为 MP4
+            // TS：清洗后拼接，再转封装为 MP4
             let tsURL = tmp.appendingPathComponent("combined.ts")
             FileManager.default.createFile(atPath: tsURL.path, contents: nil)
             let out = try FileHandle(forWritingTo: tsURL)
             defer { try? out.close() }
             for i in 0..<segments.count {
+                if segmentSizes[i] == 0 { continue } // 无效分片（广告图等）已剔除
                 let segURL = tmp.appendingPathComponent("seg-\(i)")
                 if let h = try? FileHandle(forReadingFrom: segURL) {
                     while let d = try? h.read(upToCount: 1024 * 1024), !d.isEmpty {
@@ -461,11 +474,17 @@ public final class HLSDownloadTask: @unchecked Sendable {
                     }
                 }
             }
+            try? out.close()
             let ok = await HLSDownloadTask.remuxTS(tsURL, to: finalURL)
             if !ok {
-                // 转封装失败：直接保留 TS 文件
-                try FileManager.default.moveItem(at: tsURL, to: finalURL)
-                box.mutate { $0.errorMessage = "转封装 MP4 失败，已保留 TS 格式（可用 VLC 播放）" }
+                // 转封装失败：保留 TS，但扩展名改为 .ts（诚实命名，播放器能直接识别）
+                let tsName = (finalName as NSString).deletingPathExtension + ".ts"
+                let tsFinal = URL(fileURLWithPath: FileNaming.uniquePath(directory: saveDir, filename: tsName))
+                try FileManager.default.moveItem(at: tsURL, to: tsFinal)
+                box.mutate { rec in
+                    rec.filename = tsName
+                    rec.errorMessage = "转封装 MP4 失败，已保留 TS 格式（可用 VLC/IINA 播放）"
+                }
             }
         }
 
@@ -478,21 +497,41 @@ public final class HLSDownloadTask: @unchecked Sendable {
         }
     }
 
+    // MARK: - TS 流清洗
+
+    /// 校验/修复单个分片：必须是合法的 MPEG-TS（188 字节包、0x47 同步字节）。
+    /// 返回裁掉脏数据后的数据；整段都不是 TS（广告图、防盗链响应等）则返回 nil。
+    static func sanitizeTS(_ data: Data) -> Data? {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 188 else { return nil }
+        if bytes[0] == 0x47 { return data } // 正常分片，原样返回
+        // 找第一个「0x47 且随后两个 188 周期也是 0x47」的偏移（最多扫 4KB 头部脏区）
+        let limit = max(min(bytes.count - 188 * 3, 4096), 0)
+        for off in 0...limit where bytes[off] == 0x47 {
+            if bytes[off + 188] == 0x47 && bytes[off + 188 * 2] == 0x47 {
+                return data.subdata(in: off..<data.count)
+            }
+        }
+        return nil
+    }
+
     // MARK: - 转封装
 
     static func remuxTS(_ tsURL: URL, to mp4URL: URL) async -> Bool {
-        try? FileManager.default.removeItem(at: mp4URL)
-        let asset = AVURLAsset(url: tsURL)
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
-            return false
-        }
-        session.outputURL = mp4URL
-        session.outputFileType = .mp4
-        return await withCheckedContinuation { cont in
-            session.exportAsynchronously {
-                cont.resume(returning: session.status == .completed)
+        // 先透传（无损、快），失败再用高质量预设重试（重新编码，兼容性最好）
+        for preset in [AVAssetExportPresetPassthrough, AVAssetExportPresetHighestQuality] {
+            try? FileManager.default.removeItem(at: mp4URL)
+            guard let session = AVAssetExportSession(asset: AVURLAsset(url: tsURL), presetName: preset) else {
+                continue
             }
+            session.outputURL = mp4URL
+            session.outputFileType = .mp4
+            await withCheckedContinuation { cont in
+                session.exportAsynchronously { cont.resume() }
+            }
+            if session.status == .completed { return true }
         }
+        return false
     }
 
     // MARK: - 分片/密钥获取（带重试）

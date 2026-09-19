@@ -174,6 +174,9 @@ public final class LocalServer: @unchecked Sendable {
         case ("GET", "/activate"):
             activateApp()
             return (200, "ok")
+        case ("GET", "/sniff"):
+            // 网页视频嗅探总开关（App 设置 → 浏览器扩展），扩展定期同步
+            return (200, SettingsStore.shared.settings.sniffEnabled ? "on" : "off")
         default:
             return (404, "{\"error\":\"not found\"}")
         }

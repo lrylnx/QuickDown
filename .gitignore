@@ -25,3 +25,7 @@ Extension/BrowserExtension.crx
 # 本地草稿（论坛文案等，不入库）
 本地文档/
 论坛*.md
+
+# SwiftPM 独立 scratch 构建目录（universal 双架构隔离）
+.build-a64/
+.build-x64/

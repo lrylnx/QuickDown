@@ -1,9 +1,10 @@
 // 速下扩展弹窗
 
-const DEFAULTS = { mode: "auto" };
+const DEFAULTS = { mode: "auto", sniff: true };
 
 const statusEl = document.getElementById("status");
 const toggleEl = document.getElementById("captureToggle");
+const sniffEl = document.getElementById("sniffToggle");
 const modeEl = document.getElementById("modeSelect");
 
 function setStatus(connected, port) {
@@ -24,6 +25,7 @@ async function refreshStatus() {
 document.addEventListener("DOMContentLoaded", async () => {
   const settings = await chrome.storage.sync.get(DEFAULTS);
   toggleEl.checked = settings.mode !== "off";
+  sniffEl.checked = settings.sniff !== false;
   modeEl.value = settings.mode || "auto";
 
   refreshStatus();
@@ -39,6 +41,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         setStatus(resp && resp.connected, resp && resp.port);
       });
     }
+  });
+
+  // 视频嗅探快捷开关：与选项页共用同一个设置项
+  sniffEl.addEventListener("change", () => {
+    chrome.storage.sync.set({ sniff: sniffEl.checked });
   });
 
   modeEl.addEventListener("change", () => {

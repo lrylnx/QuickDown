@@ -15,7 +15,7 @@
 // 7. SW 启动时清扫接管浏览器中已在进行中的下载（扩展刚装载 / 浏览器恢复场景）
 
 const PORTS = [10007, 10008, 10009, 10010, 10011, 10012, 10013, 10014, 10015, 10016];
-const DEFAULTS = { mode: "auto", filter: "all", excluded: "" };
+const DEFAULTS = { mode: "auto", filter: "all", excluded: "", sniff: true, sniffApp: true };
 const ACTIVE_PORT_KEY = "qd_active_port";
 const QUEUE_KEY = "qd_pending_queue";
 const MAX_QUEUE = 50;
@@ -36,10 +36,42 @@ chrome.storage.sync.get(DEFAULTS, (s) => {
 // 监听设置变化，实时更新内存
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "sync") return;
+  let sniffChanged = false;
   for (const [key, change] of Object.entries(changes)) {
-    if (key in DEFAULTS) settings[key] = change.newValue;
+    if (key in DEFAULTS) {
+      settings[key] = change.newValue;
+      if (key === "sniff" || key === "sniffApp") sniffChanged = true;
+    }
   }
+  if (sniffChanged) applySniffMenu();
 });
+
+// ============================================================================
+// 视频嗅探开关（双层）
+//   App 总开关：速下 设置 → 浏览器扩展 →「网页视频嗅探」，经 /sniff 接口同步
+//   扩展开关：扩展弹窗 / 扩展选项页（本浏览器独立控制）
+//   两者任一关闭 → 嗅探关闭
+// ============================================================================
+
+function sniffActive() {
+  return settings.sniff !== false && settings.sniffApp !== false;
+}
+
+// 从速下 App 同步总开关到 chrome.storage（SW 启动 + 每 30 秒 alarm 各同步一次）
+async function syncSniffFromApp() {
+  const port = await ensurePort();
+  if (!port) return;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1500);
+    const r = await fetch(`http://127.0.0.1:${port}/sniff`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!r.ok) return;
+    const on = (await r.text()).trim() !== "off";
+    const cur = await chrome.storage.sync.get({ sniffApp: true });
+    if (cur.sniffApp !== on) await chrome.storage.sync.set({ sniffApp: on });
+  } catch {}
+}
 
 // ============================================================================
 // Service Worker 常驻保活（100% 接管的关键）
@@ -511,7 +543,13 @@ if (supportsDetermining) {
     (async () => {
       try { await takeOver(item, { eraseFromHistory: true }); } catch (e) {}
       clearTimeout(safetyTimer);
-      doSuggest();
+      // 下载已被接管取消/抹除时不能再调用 suggest —— 对已取消的下载调用
+      // 会触发 "suggestCallback may not be called more than once" 报错。
+      // 查一下下载是否还存在：存在（如 ask 模式等待用户确认）才需要 suggest
+      try {
+        const items = await chrome.downloads.search({ id: item.id });
+        if (items.length > 0) doSuggest();
+      } catch (e) {}
     })();
   });
 }
@@ -520,45 +558,105 @@ if (supportsDetermining) {
 // 视频嗅探
 // ============================================================================
 
-const VIDEO_URL_RE = /\.(m3u8|ts|mp4|flv|webm|mkv|mov|m4v|m4s|aac|mp3)(\?|#|$)/i;
+const VIDEO_URL_RE = /\.(m3u8|ts|mp4|flv|webm|mkv|mov|m4v|m4s|aac|mp3)(\?|&|#|$)/i;
 const tabVideos = new Map();
 
+// 记录一个媒体地址（URL 规则 + Content-Type 规则共用）
+function recordVideo(tabId, url, type) {
+  let list = tabVideos.get(tabId);
+  if (!list) {
+    list = [];
+    tabVideos.set(tabId, list);
+  }
+  if (list.some((v) => v.url === url)) return;
+  list.push({ url, type });
+  if (list.length > 200) list.shift();
+  persistTabVideos();
+}
+
+// MV3 的 Service Worker 会被系统回收，内存里的 tabVideos 随之丢失
+// （表现为：视频页看一会儿后再点下载 → 「未找到视频地址」）。
+// 防抖写入 storage.session，SW 冷启动时恢复。
+let persistTimer = null;
+function persistTabVideos() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    const obj = {};
+    for (const [tid, l] of tabVideos) obj[tid] = l;
+    try { chrome.storage.session.set({ tabVideos: obj }); } catch (e) {}
+  }, 400);
+}
+
+// SW 冷启动：恢复上次收集的媒体地址
+try {
+  chrome.storage.session.get({ tabVideos: {} }).then((d) => {
+    for (const [tid, l] of Object.entries(d.tabVideos)) {
+      if (Array.isArray(l) && l.length) tabVideos.set(Number(tid), l);
+    }
+  });
+} catch (e) {}
+
 chrome.webRequest.onBeforeRequest.addListener((details) => {
+  if (!sniffActive()) return; // 视频嗅探已关闭：不收集任何媒体地址
   if (details.tabId < 0) return;
   const url = details.url;
   if (!VIDEO_URL_RE.test(url)) return;
   if (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost")) return;
   const m = url.toLowerCase().match(/\.(m3u8|ts|mp4|flv|webm|mkv|mov|m4v|m4s|aac|mp3)/);
-  const type = m ? m[1] : "media";
-  let list = tabVideos.get(details.tabId);
-  if (!list) {
-    list = [];
-    tabVideos.set(details.tabId, list);
-  }
-  if (!list.some((v) => v.url === url)) {
-    list.push({ url, type });
-    if (list.length > 200) list.shift();
-  }
+  recordVideo(details.tabId, url, m ? m[1] : "media");
 }, { urls: ["<all_urls>"] });
 
-chrome.tabs.onRemoved.addListener((tabId) => tabVideos.delete(tabId));
+// Content-Type 兜底：地址不带后缀的 m3u8/mp4 请求靠响应头识别
+chrome.webRequest.onHeadersReceived.addListener((details) => {
+  if (!sniffActive()) return;
+  if (details.tabId < 0) return;
+  const url = details.url;
+  if (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost")) return;
+  if (VIDEO_URL_RE.test(url)) return; // 已由 URL 规则收集
+  const ct = (details.responseHeaders || []).find(
+    (h) => h.name.toLowerCase() === "content-type"
+  );
+  if (!ct || !/(mpegurl|video\/|audio\/)/i.test(ct.value || "")) return;
+  recordVideo(details.tabId, url, ct.value.toLowerCase().includes("mpegurl") ? "m3u8" : "media");
+}, { urls: ["<all_urls>"] }, ["responseHeaders"]);
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  tabVideos.delete(tabId);
+  persistTabVideos();
+});
 
 // ============================================================================
 // 右键菜单
 // ============================================================================
 
-chrome.runtime.onInstalled.addListener(() => {
+function createMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: "qd-link", title: "用速下下载此链接", contexts: ["link"] });
     chrome.contextMenus.create({ id: "qd-media", title: "用速下下载此媒体", contexts: ["video", "audio"] });
     chrome.contextMenus.create({ id: "qd-image", title: "用速下下载此图片", contexts: ["image"] });
     chrome.contextMenus.create({ id: "qd-page", title: "用速下下载当前页面", contexts: ["page"] });
-    chrome.contextMenus.create({ id: "qd-sniff", title: "🎬 嗅探本页视频", contexts: ["page"] });
+    if (sniffActive()) {
+      chrome.contextMenus.create({ id: "qd-sniff", title: "🎬 嗅探本页视频", contexts: ["page"] });
+    }
   });
+}
+
+// 视频嗅探开关变化时同步右键菜单（关闭 → 移除嗅探菜单；开启 → 重新创建）
+function applySniffMenu() {
+  if (sniffActive()) {
+    chrome.contextMenus.create({ id: "qd-sniff", title: "🎬 嗅探本页视频", contexts: ["page"] });
+  } else {
+    chrome.contextMenus.remove("qd-sniff", () => void chrome.runtime.lastError);
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  createMenus();
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "qd-sniff") {
+    if (!sniffActive()) return; // 视频嗅探已关闭
     if (tab && tab.id != null) {
       chrome.tabs.sendMessage(tab.id, { type: "showPanel" }).catch(() => {
         notify("未检测到视频", "本页暂无可用视频资源。");
@@ -609,6 +707,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== "qd-keepalive") return;
   keepAliveTick();
+  syncSniffFromApp(); // 同步 App 端视频嗅探总开关
   // 补扫进行中的下载：SW 曾被杀再唤醒的窗口期内 onCreated 可能已迟到/丢失，
   // 这里把仍在浏览器里的下载补接管（markCaptured 按 id 去重，已接管的直接跳过）
   sweepInProgress();
@@ -644,7 +743,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.type === "getVideos") {
     const tabId = sender.tab ? sender.tab.id : -1;
-    sendResponse({ videos: tabVideos.get(tabId) || [] });
+    sendResponse({ videos: sniffActive() ? (tabVideos.get(tabId) || []) : [] });
     return false;
   }
   if (msg && msg.type === "probeSize") {
@@ -669,3 +768,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 });
+
+// SW 启动：同步一次 App 端嗅探总开关（必须放在文件末尾 ——
+// ensurePort/activePort 等都在前面声明，提前调用会触发 TDZ 引用错误）
+syncSniffFromApp();
