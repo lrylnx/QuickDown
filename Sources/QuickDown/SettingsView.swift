@@ -29,6 +29,13 @@ struct SettingsView: View {
         .onDisappear {
             apply()
         }
+        // 关键：任意设置变化立即写回 Store 并同步给下载管理器/服务器。
+        // 此前只在窗口 onDisappear 时 apply()，而 macOS 的 Settings 场景窗口
+        // 关闭时 onDisappear 不会触发（窗口被缓存而非销毁），导致
+        // 「按分类保存」「接管弹窗」「先确认再下载」等开关全部不生效。
+        .onChange(of: settings) { _ in
+            apply()
+        }
     }
 
     private func refreshLoginStatus() {
@@ -40,14 +47,14 @@ struct SettingsView: View {
     }
 
     private func apply() {
-        // 目录存在性检查
+        // 限幅
         var fm = settings
-        if !FileManager.default.fileExists(atPath: fm.downloadDirectory) {
-            try? FileManager.default.createDirectory(atPath: fm.downloadDirectory, withIntermediateDirectories: true)
-        }
         fm.maxConcurrent = min(max(fm.maxConcurrent, 1), 10)
         fm.maxSegments = min(max(fm.maxSegments, 1), 16)
         fm.speedLimitBps = max(0, fm.speedLimitBps)
+        // 注意：不在这里自动创建下载目录 —— 本函数现在由 onChange 逐次触发，
+        // 手输路径时会把半截路径创建成真实目录；下载时 ensurePartFile/merge
+        // 会按需创建最终目录，无需提前建。
         SettingsStore.shared.update { $0 = fm }
         model.applySettings()
         refreshLoginStatus()
@@ -385,15 +392,17 @@ struct ExtensionSettingsView: View {
             if !message.isEmpty {
                 Text(message)
                     .font(.caption)
-                    .foregroundStyle(.green)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(message.hasPrefix("⚠") ? .orange : .green)
             }
 
             HStack {
                 Button("打开扩展目录") { revealExtension() }
                 Button("复制扩展路径") {
+                    let ext = stableExtensionPath()
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(stableExtensionPath().path, forType: .string)
-                    message = "扩展路径已复制到剪贴板"
+                    NSPasteboard.general.setString(ext.url.path, forType: .string)
+                    message = ext.syncError ?? "扩展路径已复制到剪贴板"
                 }
             }
         }
@@ -412,28 +421,52 @@ struct ExtensionSettingsView: View {
         }
     }
 
-    /// 稳定扩展路径：优先应用包内，同时同步一份到用户目录（可读、稳定、不怕 App 移动）
-    private func stableExtensionPath() -> URL {
+    /// 稳定扩展路径：优先应用包内，同时同步一份到用户目录（可读、稳定、不怕 App 移动）。
+    /// 返回 (url, syncError)：syncError 非 nil 表示同步失败，调用方必须显示出来 ——
+    /// 绝不能静默吞掉。曾踩坑：扩展目录被 sudo 操作改成 root 属主后，App 以普通
+    /// 用户身份 removeItem/copyItem 全部失败但无人知晓，浏览器里永远是旧版扩展，
+    /// 所有扩展端修复都不生效，还以为代码没修对。
+    private func stableExtensionPath() -> (url: URL, syncError: String?) {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = base.appendingPathComponent("QuickDown/browser-extension", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            return (dir, "⚠️ 无法创建扩展目录：\(error.localizedDescription)")
+        }
         // 从应用包同步最新扩展文件（文件夹 + CRX 拖拽包）
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("BrowserExtension"),
            fm.fileExists(atPath: bundled.path) {
-            try? fm.removeItem(at: dir)
-            try? fm.copyItem(at: bundled, to: dir)
+            do {
+                if fm.fileExists(atPath: dir.path) {
+                    try fm.removeItem(at: dir)
+                }
+                try fm.copyItem(at: bundled, to: dir)
+            } catch {
+                return (dir, """
+                ⚠️ 扩展文件同步失败：\(error.localizedDescription)
+                多半是扩展目录属主不是当前用户（曾被 sudo 操作改过属主）。
+                在终端运行下面这条命令修复后重试：
+                sudo chown -R $(whoami):staff "$HOME/Library/Application Support/QuickDown/browser-extension"
+                """)
+            }
         }
         if let bundledCRX = Bundle.main.resourceURL?.appendingPathComponent("BrowserExtension.crx"),
            fm.fileExists(atPath: bundledCRX.path) {
             try? fm.removeItem(atPath: dir.appendingPathComponent("BrowserExtension.crx").path)
             try? fm.copyItem(at: bundledCRX, to: dir.appendingPathComponent("BrowserExtension.crx"))
         }
-        return dir
+        return (dir, nil)
     }
 
     private func runInstallWizard(_ browser: InstalledBrowser) {
-        let extDir = stableExtensionPath()
+        let ext = stableExtensionPath()
+        if let err = ext.syncError {
+            message = err
+            return
+        }
+        let extDir = ext.url
         Task { @MainActor in
             // 1. 打开该浏览器的扩展管理页
             let p = Process()
@@ -482,9 +515,13 @@ struct ExtensionSettingsView: View {
     }
 
     private func revealExtension() {
-        let dir = stableExtensionPath()
-        if FileManager.default.fileExists(atPath: dir.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([dir])
+        let ext = stableExtensionPath()
+        if let err = ext.syncError {
+            message = err
+            return
+        }
+        if FileManager.default.fileExists(atPath: ext.url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([ext.url])
         } else {
             message = "未找到扩展目录"
         }

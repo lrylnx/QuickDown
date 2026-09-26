@@ -107,6 +107,31 @@ final class FileNamingTests: XCTestCase {
         XCTAssertEqual(seg.remaining, 0)
     }
 
+    func testExtensionNameForContentType() {
+        XCTAssertEqual(FileNaming.extensionName(forContentType: "image/jpeg"), "jpg")
+        XCTAssertEqual(FileNaming.extensionName(forContentType: "image/webp"), "webp")
+        XCTAssertEqual(FileNaming.extensionName(forContentType: "Image/PNG"), "png")
+        // 带参数的 Content-Type
+        XCTAssertEqual(FileNaming.extensionName(forContentType: "image/jpeg; charset=binary"), "jpg")
+        XCTAssertEqual(FileNaming.extensionName(forContentType: "video/mp4"), "mp4")
+        XCTAssertEqual(FileNaming.extensionName(forContentType: "application/pdf"), "pdf")
+        // 通用/未知类型不猜
+        XCTAssertNil(FileNaming.extensionName(forContentType: "application/octet-stream"))
+        XCTAssertNil(FileNaming.extensionName(forContentType: "text/html"))
+        XCTAssertNil(FileNaming.extensionName(forContentType: nil))
+        XCTAssertNil(FileNaming.extensionName(forContentType: ""))
+    }
+
+    func testWithInferredExtension() {
+        // 无扩展名的哈希名（详情页图片 URL 末段）→ 按 Content-Type 补全
+        XCTAssertEqual(FileNaming.withInferredExtension(name: "9f3c8a2b1d4e", contentType: "image/webp"), "9f3c8a2b1d4e.webp")
+        XCTAssertEqual(FileNaming.withInferredExtension(name: "download", contentType: "image/jpeg; charset=binary"), "download.jpg")
+        // 已有扩展名 → 原样
+        XCTAssertEqual(FileNaming.withInferredExtension(name: "photo.jpg", contentType: "image/png"), "photo.jpg")
+        // 无可靠映射 → 原样
+        XCTAssertEqual(FileNaming.withInferredExtension(name: "9f3c8a2b", contentType: "application/octet-stream"), "9f3c8a2b")
+    }
+
     func testParsePartFileName() {
         // 常规：文件名含多个点，取末尾 .part
         XCTAssertEqual(FileNaming.parsePartFileName(".WorkBuddy.dmg.part3")?.filename, "WorkBuddy.dmg")

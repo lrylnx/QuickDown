@@ -79,6 +79,7 @@ struct ProbeInfo {
     var totalSize: Int64
     var acceptsRanges: Bool
     var filename: String?
+    var contentType: String?   // 响应 Content-Type（文件名无扩展名时用于推断补全）
 }
 
 // MARK: - 单个下载任务
@@ -167,6 +168,13 @@ public final class DownloadTask: @unchecked Sendable {
                 // 文件名：服务器 Content-Disposition 提供的名字优先于"通用名/无后缀名"
                 if let name = info.filename, !name.isEmpty, Self.shouldPreferServerFilename(rec.filename) {
                     rec.filename = name
+                    rec.finalPath = nil
+                }
+                // URL / Content-Disposition 都没给出扩展名时，按 Content-Type 推断补全
+                // （详情页图片 URL 末段常是哈希 token，如 /img/2026/9f3c8a2b，无后缀）
+                let extFixed = FileNaming.withInferredExtension(name: rec.filename, contentType: info.contentType)
+                if extFixed != rec.filename {
+                    rec.filename = extFixed
                     rec.finalPath = nil
                 }
                 if rec.finalPath == nil {
@@ -258,7 +266,8 @@ public final class DownloadTask: @unchecked Sendable {
         if url.isFileURL {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
             return (ProbeInfo(totalSize: Int64(size ?? 0), acceptsRanges: false,
-                              filename: FileNaming.filename(fromURL: url) ?? url.lastPathComponent), nil)
+                              filename: FileNaming.filename(fromURL: url) ?? url.lastPathComponent,
+                              contentType: nil), nil)
         }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             throw DownloadError.unsupportedScheme
@@ -312,7 +321,8 @@ public final class DownloadTask: @unchecked Sendable {
         }
 
         let filename = FileNaming.filename(fromContentDisposition: headers["content-disposition"])
-        return (ProbeInfo(totalSize: total, acceptsRanges: acceptsRanges, filename: filename), htmlRefresh)
+        return (ProbeInfo(totalSize: total, acceptsRanges: acceptsRanges, filename: filename,
+                          contentType: headers["content-type"]), htmlRefresh)
     }
 
     /// 读取 HTML 页面并解析 meta refresh 跳转地址

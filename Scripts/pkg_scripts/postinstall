@@ -46,11 +46,11 @@ if [ -n "$CONSOLE_USER" ] && [ -f "$REG_SCRIPT" ]; then
     echo "==> 为 $CONSOLE_USER 注册浏览器扩展"
     USER_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")
     if [ -n "$USER_UID" ] && command -v launchctl >/dev/null 2>&1 && [ "$(id -u)" = "0" ]; then
-      launchctl asuser "$USER_UID" bash "$TMP_SCRIPT" 2>&1 || \
-      su - "$CONSOLE_USER" -c "bash '$TMP_SCRIPT'" 2>&1 || \
-      bash "$TMP_SCRIPT" 2>&1
+      launchctl asuser "$USER_UID" bash "$TMP_SCRIPT" "$CONSOLE_USER" 2>&1 || \
+      su - "$CONSOLE_USER" -c "bash '$TMP_SCRIPT' '$CONSOLE_USER'" 2>&1 || \
+      bash "$TMP_SCRIPT" "$CONSOLE_USER" 2>&1
     else
-      su - "$CONSOLE_USER" -c "bash '$TMP_SCRIPT'" 2>&1 || bash "$TMP_SCRIPT" 2>&1
+      su - "$CONSOLE_USER" -c "bash '$TMP_SCRIPT' '$CONSOLE_USER'" 2>&1 || bash "$TMP_SCRIPT" "$CONSOLE_USER" 2>&1
     fi
     rm -f "$TMP_SCRIPT"
   fi

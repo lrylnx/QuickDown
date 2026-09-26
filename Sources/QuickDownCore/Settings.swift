@@ -2,7 +2,10 @@ import Foundation
 
 // MARK: - 应用设置
 
-public struct AppSettings: Codable, Sendable {
+// Equatable：SettingsView 用 onChange(of: settings) 监听任意字段变化，实现「改了立即生效」。
+// （此前只在设置窗口 onDisappear 时写回，而 macOS 的 Settings 场景窗口关闭时
+//  onDisappear 并不可靠 —— 窗口被缓存隐藏而非销毁，导致设置从未写回 Store/Manager）
+public struct AppSettings: Codable, Sendable, Equatable {
     public var downloadDirectory: String
     public var maxConcurrent: Int       // 同时下载数
     public var maxSegments: Int         // 分段数

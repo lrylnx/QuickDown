@@ -14,6 +14,24 @@ if [ ! -f "$EXT_PATH/manifest.json" ]; then
 fi
 
 # ----------------------------------------------------------------------------
+# 目标用户（postinstall 以 root 运行时通过 $1 传入控制台用户）
+# 以 root 运行时 $HOME 不可靠（可能是 /var/root），一律显式解析真实家目录；
+# 所有写出的文件/目录最后 chown 回登录用户 —— 否则扩展目录变 root 属主，
+# App 内的扩展同步（普通用户身份）会全部失败且旧版曾静默吞掉，
+# 浏览器里永远是旧版扩展（v1.5.0 → v1.5.3 期间的真实事故）。
+# ----------------------------------------------------------------------------
+TARGET_USER="${1:-}"
+USER_HOME="$HOME"
+TUID=""
+TGID=""
+if [ -n "$TARGET_USER" ]; then
+  USER_HOME=$(python3 -c "import os,sys; print(os.path.expanduser('~' + sys.argv[1]))" "$TARGET_USER" 2>/dev/null || echo "")
+  TUID=$(id -u "$TARGET_USER" 2>/dev/null || echo "")
+  TGID=$(id -g "$TARGET_USER" 2>/dev/null || echo "")
+fi
+[ -n "$USER_HOME" ] || USER_HOME="$HOME"
+
+# ----------------------------------------------------------------------------
 # 步骤 0（升级安装关键）：原地刷新所有旧版扩展副本
 #
 # 旧版本用户浏览器里加载的扩展可能位于：
@@ -23,16 +41,35 @@ fi
 # 否则浏览器里会出现重复扩展。纯文件替换，浏览器运行中执行也安全，
 # 浏览器重启后自动加载新版。
 # ----------------------------------------------------------------------------
-python3 - "$EXT_PATH" <<'PYEOF'
+python3 - "$EXT_PATH" "$USER_HOME" "$TUID" "$TGID" <<'PYEOF'
 import json, os, shutil, sys, glob
 
 ext_path = os.path.abspath(sys.argv[1])
+home = sys.argv[2]
+uid = int(sys.argv[3]) if sys.argv[3] else None
+gid = int(sys.argv[4]) if sys.argv[4] else None
+
+def chown_tree(p):
+    # root 运行时把刷新出来的副本还给登录用户，避免 App 内同步再次失败
+    if uid is None:
+        return
+    for root, dirs, files in os.walk(p):
+        try: os.chown(root, uid, gid)
+        except Exception: pass
+        for d in dirs:
+            try: os.chown(os.path.join(root, d), uid, gid)
+            except Exception: pass
+        for f in files:
+            try: os.chown(os.path.join(root, f), uid, gid)
+            except Exception: pass
+    try: os.chown(p, uid, gid)
+    except Exception: pass
+
 try:
     ext_name = json.load(open(os.path.join(ext_path, "manifest.json"), encoding="utf-8")).get("name", "")
 except Exception:
     raise SystemExit(0)
 
-home = os.path.expanduser("~")
 browsers = ["Google/Chrome", "Microsoft Edge", "Thorium",
             "BraveSoftware/Brave-Browser", "Chromium", "Vivaldi"]
 
@@ -99,6 +136,7 @@ for dest in sorted(candidates):
             shutil.copy2(crx, tmp)
         shutil.rmtree(dest)
         os.rename(tmp, dest)
+        chown_tree(dest)
         refreshed += 1
         print("  ✅ 已更新扩展副本: " + dest)
     except Exception as e:
@@ -129,7 +167,7 @@ BROWSERS=(
 REGISTERED=""
 ALREADY=""
 for dir in "${BROWSERS[@]}"; do
-  base="$HOME/Library/Application Support/$dir"
+  base="$USER_HOME/Library/Application Support/$dir"
   [ -d "$base" ] || continue
 
   # 浏览器进程是否在运行
@@ -145,9 +183,11 @@ for dir in "${BROWSERS[@]}"; do
     pref="$profile/Preferences"
     [ -f "$pref" ] || continue
 
-    if python3 - "$pref" "$EXT_ID" "$EXT_PATH" <<'PYEOF'
+    if python3 - "$pref" "$EXT_ID" "$EXT_PATH" "$TUID" "$TGID" <<'PYEOF'
 import json, sys, os, time
 pref_path, ext_id, ext_path = sys.argv[1], sys.argv[2], sys.argv[3]
+uid = int(sys.argv[4]) if sys.argv[4] else None
+gid = int(sys.argv[5]) if sys.argv[5] else None
 try:
     prefs = json.load(open(pref_path))
 except Exception:
@@ -195,10 +235,14 @@ ext.update({
     "install_time": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
 })
 prefs.setdefault("extensions", {}).setdefault("ui", {})["developer_mode"] = True
-# 原子写入
+# 原子写入（以 root 运行时写出的文件要 chown 回登录用户，
+# 否则浏览器以用户身份运行时写不回 Preferences）
 tmp = pref_path + ".qd-tmp"
 json.dump(prefs, open(tmp, "w"), indent=2)
 os.replace(tmp, pref_path)
+if uid is not None:
+    try: os.chown(pref_path, uid, gid)
+    except Exception: pass
 print("  ✅ 已注册: %s (%s)" % (pref_path, ext_id))
 PYEOF
     then

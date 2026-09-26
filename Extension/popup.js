@@ -1,11 +1,13 @@
 // 速下扩展弹窗
+//
+// 接管行为（弹不弹确认窗口、弹不弹主窗口）统一由速下 App 端设置决定；
+// 扩展端只保留总开关（开启/关闭接管），避免两端各一套「接管方式」互相打架。
 
 const DEFAULTS = { mode: "auto", sniff: true };
 
 const statusEl = document.getElementById("status");
 const toggleEl = document.getElementById("captureToggle");
 const sniffEl = document.getElementById("sniffToggle");
-const modeEl = document.getElementById("modeSelect");
 
 function setStatus(connected, port) {
   if (connected) {
@@ -26,13 +28,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   const settings = await chrome.storage.sync.get(DEFAULTS);
   toggleEl.checked = settings.mode !== "off";
   sniffEl.checked = settings.sniff !== false;
-  modeEl.value = settings.mode || "auto";
 
   refreshStatus();
 
   toggleEl.addEventListener("change", () => {
-    const mode = toggleEl.checked ? (modeEl.value === "off" ? "auto" : modeEl.value) : "off";
-    modeEl.value = mode;
+    const mode = toggleEl.checked ? "auto" : "off";
     chrome.storage.sync.set({ mode });
     if (mode === "off") {
       setStatus(false, null);
@@ -46,11 +46,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 视频嗅探快捷开关：与选项页共用同一个设置项
   sniffEl.addEventListener("change", () => {
     chrome.storage.sync.set({ sniff: sniffEl.checked });
-  });
-
-  modeEl.addEventListener("change", () => {
-    chrome.storage.sync.set({ mode: modeEl.value });
-    toggleEl.checked = modeEl.value !== "off";
   });
 });
 

@@ -88,6 +88,53 @@ public enum FileNaming {
         return false
     }
 
+    /// Content-Type → 扩展名（仅收录可靠的一对一映射；application/octet-stream 等
+    /// 通用类型返回 nil，宁可不猜也不猜错）
+    public static func extensionName(forContentType contentType: String?) -> String? {
+        guard let raw = contentType, !raw.isEmpty else { return nil }
+        // 去掉 "; charset=utf-8" 等参数
+        let ct = raw.split(separator: ";").first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+        switch ct {
+        case "image/jpeg": return "jpg"
+        case "image/png": return "png"
+        case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        case "image/bmp": return "bmp"
+        case "image/tiff": return "tiff"
+        case "image/heic", "image/heif": return "heic"
+        case "image/avif": return "avif"
+        case "image/svg+xml": return "svg"
+        case "video/mp4": return "mp4"
+        case "video/webm": return "webm"
+        case "video/x-matroska": return "mkv"
+        case "video/quicktime": return "mov"
+        case "video/x-msvideo": return "avi"
+        case "video/mpeg": return "mpeg"
+        case "audio/mpeg": return "mp3"
+        case "audio/mp4", "audio/x-m4a": return "m4a"
+        case "audio/wav", "audio/x-wav": return "wav"
+        case "audio/flac": return "flac"
+        case "audio/ogg": return "ogg"
+        case "application/pdf": return "pdf"
+        case "application/zip": return "zip"
+        case "application/x-rar-compressed", "application/vnd.rar": return "rar"
+        case "application/x-7z-compressed": return "7z"
+        case "application/gzip": return "gz"
+        case "application/x-apple-diskimage": return "dmg"
+        default: return nil
+        }
+    }
+
+    /// 文件名没有扩展名时，按服务器 Content-Type 推断补全。
+    /// 详情页图片 URL 的路径末段常是哈希 token（如 /img/2026/9f3c8a2b…），
+    /// 下载后无后缀导致系统无法识别文件类型。已有扩展名或无可靠映射时原样返回。
+    public static func withInferredExtension(name: String, contentType: String?) -> String {
+        guard (name as NSString).pathExtension.isEmpty else { return name }
+        guard let ext = extensionName(forContentType: contentType) else { return name }
+        return "\(name).\(ext)"
+    }
+
     /// 清洗非法字符
     public static func sanitize(_ name: String) -> String {
         var n = name

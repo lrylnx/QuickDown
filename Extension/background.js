@@ -6,7 +6,10 @@
 //    每 20 秒调用一次轻量扩展 API 重置空闲计时器，让 SW 永不休眠，
 //    onCreated → cancel 稳定在毫秒级执行 —— 这是 100% 接管的关键。
 // 1. 设置在 SW 启动时预加载到内存，事件 hot path 零异步读取
-// 2. onDeterminingFilename + onCreated 双事件兜底，cancel 之前零 await
+// 2. onCreated 单点完整接管，不使用 onDeterminingFilename —— 该事件的 suggest
+//    协议极易产生 "Download must be in progress" / "suggestCallback may not be
+//    called more than once" 控制台报错（详见下载事件监听一节），对接管可靠性
+//    没有实质增益，cancel 之前零 await
 // 3. 并行端口发现 + 活跃端口持久化
 // 4. 任务队列：速下未启动时暂存，启动后自动补发
 // 5. alarms 定期保活 + 队列 flush
@@ -286,6 +289,39 @@ async function probeVideoSize(url) {
 }
 
 // ============================================================================
+// 请求身份补全（User-Agent + Cookie）
+//
+// 右键菜单 / 接管路径把 URL 交给速下后，由速下用自己的会话重新下载。
+// 它没有浏览器的请求上下文：UA 只能回退到 QuickDown/1.0，Cookie 完全缺失。
+// 防盗链 CDN（图片站、电商详情图等）对非常规 UA / 无 Cookie 的请求会返回
+// 占位图或错误内容 —— 表现为「下载到的不是原图」。
+// 这里统一在发送前补上浏览器 UA 和该 URL 域下的 Cookie。
+// ============================================================================
+
+function buildCookieHeader(url) {
+  return new Promise((resolve) => {
+    try {
+      chrome.cookies.getAll({ url }, (cookies) => {
+        void chrome.runtime.lastError;
+        if (!Array.isArray(cookies) || cookies.length === 0) return resolve(undefined);
+        const header = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+        resolve(header.length > 16384 ? header.slice(0, 16384) : header);
+      });
+    } catch (e) {
+      resolve(undefined);
+    }
+  });
+}
+
+async function enrichPayload(payload) {
+  if (!payload.userAgent) payload.userAgent = navigator.userAgent;
+  if (!payload.cookie && payload.url && /^https?:/i.test(payload.url)) {
+    payload.cookie = await buildCookieHeader(payload.url);
+  }
+  return payload;
+}
+
+// ============================================================================
 // 交给速下
 // ============================================================================
 
@@ -303,6 +339,7 @@ async function sendToApp(item, portOverride) {
         filename: item.filename || undefined,
         referer: item.referer || undefined,
         userAgent: item.userAgent || undefined,
+        cookie: item.cookie || undefined,
       }),
       signal: ctrl.signal,
     });
@@ -317,7 +354,10 @@ async function sendToApp(item, portOverride) {
 // 过滤（纯同步，读内存 settings）
 // ============================================================================
 
-const MEDIA_RE = /\.(mp4|mkv|avi|mov|flv|webm|ts|m4v|mpg|mpeg|mp3|wav|flac|aac|ogg|m4a|wma|zip|rar|7z|tar|gz|bz2|xz|dmg|pkg|iso|apk|exe|msi|pdf|doc|docx|xls|xlsx|ppt|pptx|cmd|bat|dll|bin|dat|crx|txt|csv|json|xml|epub|log|torrent|psd|ttf|otf|woff2?)(\?|#|$)/i;
+// 「仅媒体与安装包」的扩展名白名单 —— 与选项页文案一致：视频/音频/压缩包/安装包。
+// 注意不要把 pdf/doc/txt/json 等文档与代码后缀加进来：白名单过宽时该选项
+// 对常见下载几乎不过滤，表现为「所有文件与仅媒体没区别」。
+const MEDIA_RE = /\.(mp4|mkv|avi|mov|flv|webm|ts|m4v|mpg|mpeg|wmv|3gp|mp3|wav|flac|aac|ogg|m4a|wma|opus|ape|zip|rar|7z|tar|gz|bz2|xz|zst|dmg|pkg|iso|apk|exe|msi|deb|rpm|appimage)(\?|#|$)/i;
 const MEDIA_MIME = /^(video\/|audio\/)/;
 
 function isExcluded(url, excludedText) {
@@ -352,12 +392,15 @@ function shouldCapture(item) {
 
 function notify(title, message) {
   try {
-    chrome.notifications.create({
+    // MV3 下 create 返回 Promise，拒绝（如图标缺失）无人接会成为
+    // Unhandled rejection 噪音，显式吞掉
+    const r = chrome.notifications.create({
       type: "basic",
       iconUrl: "icons/icon128.png",
       title,
       message,
     });
+    if (r && typeof r.catch === "function") r.catch(() => {});
   } catch (e) {}
 }
 
@@ -368,6 +411,10 @@ function notify(title, message) {
 // 已接管的 download id：同一 item 的重复事件只发一次任务
 // （按 id 而不是按 url 去重 —— 按 url 去重会误杀 8 秒内的重复下载，
 //  把第二次下载白白放给浏览器）
+//
+// 注意：只增不删。相关事件（onChanged 等）的派发可能明显迟到（SW 唤醒慢、
+// 队列拥堵），若 cancel/erase 一完成就把 id 删掉，迟到的事件会把已接管的下载
+// 误判成未接管。id 单调递增永不复用，靠 500 上限裁剪即可。
 const capturedIds = new Set();
 function markCaptured(id) {
   if (capturedIds.has(id)) return false;
@@ -388,13 +435,10 @@ chrome.downloads.onChanged.addListener((delta) => {
   if (!capturedIds.has(delta.id)) return;
   const state = delta.state && delta.state.current;
   if (state === "complete") {
-    capturedIds.delete(delta.id);
     (async () => {
       try { await chrome.downloads.removeFile(delta.id); } catch (e) {}
       try { await chrome.downloads.erase({ id: delta.id }); } catch (e) {}
     })();
-  } else if (state === "canceled" || state === "interrupted") {
-    capturedIds.delete(delta.id);
   }
 });
 
@@ -414,14 +458,9 @@ async function takeOver(downloadItem, opts = {}) {
     url,
     filename: deriveFilename(downloadItem),
     referer: downloadItem.referrer,
-    userAgent: downloadItem.userAgent,
+    // 注意：DownloadItem 没有 userAgent 字段（此前写的 downloadItem.userAgent
+    // 恒为 undefined），统一由 enrichPayload 用浏览器真实 UA 补全
   };
-
-  // ask 模式：弹通知
-  if (settings.mode === "ask") {
-    notifyAsk(downloadItem, payload);
-    return;
-  }
 
   // ---- 第一个异步操作：立即取消浏览器下载 ----
   let cancelOk = false;
@@ -443,39 +482,11 @@ async function takeOver(downloadItem, opts = {}) {
   }
 
   // 如果 cancel 失败（下载可能已完成），仍交给速下（与 Ghost 行为一致）
+  await enrichPayload(payload);
   const ok = await sendToApp(payload);
   if (!ok) {
     await enqueueTask(payload);
   }
-}
-
-function notifyAsk(item, payload) {
-  const id = "qd-ask-" + item.id;
-  const name = payload.filename || item.filename || "文件";
-  chrome.notifications.create(id, {
-    type: "basic",
-    iconUrl: "icons/icon128.png",
-    title: "发现下载：" + name,
-    message: "要用速下接管这个下载吗？",
-    buttons: [{ title: "用速下下载" }, { title: "放弃（浏览器下载）" }],
-  });
-
-  const handler = async (nid, buttonIndex) => {
-    if (nid !== id) return;
-    chrome.notifications.onButtonClicked.removeListener(handler);
-    if (buttonIndex === 0) {
-      try { await chrome.downloads.cancel(item.id); } catch (e) {}
-      try { await chrome.downloads.erase({ id: item.id }); } catch (e) {}
-      const ok = await sendToApp(payload);
-      if (ok) {
-        notify("已交给速下", name + " 已添加到速下。");
-      } else {
-        await enqueueTask(payload);
-        notify("速下未运行", "已加入等待队列，速下启动后自动下载。");
-      }
-    }
-  };
-  chrome.notifications.onButtonClicked.addListener(handler);
 }
 
 // ============================================================================
@@ -484,23 +495,24 @@ function notifyAsk(item, payload) {
 // 策略：
 // - SW 常驻保活（见文件头），onCreated 到达即毫秒级处理，浏览器下载来不及开始
 // - onCreated：100% 触发，负责完整接管逻辑（检查、去重、cancel、发任务）
-// - onDeterminingFilename：MV3 SW 上不可靠（经常不触发），只做额外的 cancel
-//   （先 cancel 再 suggest，浏览器在等 suggest 期间下载暂停，cancel 更干净）
 // - onChanged：极小文件在 cancel 落地前已完成时，删除文件 + 抹掉历史（见上方兜底）
 // - SW 启动清扫：接管浏览器中已在进行中的下载（扩展装载/更新瞬间的漏网之鱼）
+//
+// 为什么不用 onDeterminingFilename（1.5.0~1.5.2 的教训）：
+// 该事件的 suggest 回调有一套极严格的隐式协议，违反任何一条都会在控制台报错：
+//   ① suggestCallback 必须恰好调用一次 —— 监听器若不同步返回 true，Chrome 会
+//      在监听器返回后立即自动代调一次收尾；之后任何再调用都报
+//      "suggestCallback may not be called more than once"
+//   ② 只能对 in_progress 的下载调用 —— 对已被 cancel 的下载调用报
+//      "Download must be in progress"。而接管流程必然 cancel 下载：cancel 请求
+//      先发出就必先到达（IPC 有序），事后 downloads.search 拦不住（canceled
+//      条目仍在结果里，erase 后的事件派发时序也不定）
+//   ③ 其他扩展若也在监听该事件，先完成目标确定的会让我们的 suggest 落在
+//      已完成的下载上（同 ②）
+// 收益却很小：它只是比 onCreated 更早几百毫秒的拦截点，MV3 上还经常不触发。
+// onCreated + SW 常驻保活已保证毫秒级 cancel，扫尾有 sweepInProgress + alarm。
+// 除非要改下载文件名，否则不要碰这个事件。
 // ============================================================================
-
-const supportsDetermining = typeof chrome.downloads?.onDeterminingFilename?.addListener === "function";
-
-// 组装下载任务 payload（同步）
-function buildPayload(item) {
-  return {
-    url: item.finalUrl || item.url,
-    filename: deriveFilename(item),
-    referer: item.referrer,
-    userAgent: item.userAgent,
-  };
-}
 
 // ---- onCreated：完整接管（一定触发）----
 chrome.downloads.onCreated.addListener((item) => {
@@ -519,40 +531,6 @@ async function sweepInProgress() {
   } catch (e) {}
 }
 sweepInProgress();
-
-// ---- onDeterminingFilename：能触发时是更早的拦截点（MV3 上经常不触发，仅作增强）----
-// 该事件触发时下载正暂停在"等待文件名"阶段，此时 cancel 最干净。
-// 与 onCreated 都走完整 takeOver，由 markCaptured 按 id 去重：谁先触发谁生效，
-// 另一个自动跳过 —— 双保险，任何一边失效都不影响接管。
-if (supportsDetermining) {
-  chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
-    let suggested = false;
-    const doSuggest = () => {
-      if (!suggested) { suggested = true; suggest(); }
-    };
-    // 安全超时：3 秒内必须 suggest
-    const safetyTimer = setTimeout(doSuggest, 3000);
-
-    // 只对应该接管的下载做接管
-    if (settings.mode === "off" || !shouldCapture(item)) {
-      clearTimeout(safetyTimer);
-      doSuggest();
-      return;
-    }
-
-    (async () => {
-      try { await takeOver(item, { eraseFromHistory: true }); } catch (e) {}
-      clearTimeout(safetyTimer);
-      // 下载已被接管取消/抹除时不能再调用 suggest —— 对已取消的下载调用
-      // 会触发 "suggestCallback may not be called more than once" 报错。
-      // 查一下下载是否还存在：存在（如 ask 模式等待用户确认）才需要 suggest
-      try {
-        const items = await chrome.downloads.search({ id: item.id });
-        if (items.length > 0) doSuggest();
-      } catch (e) {}
-    })();
-  });
-}
 
 // ============================================================================
 // 视频嗅探
@@ -631,6 +609,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 function createMenus() {
   chrome.contextMenus.removeAll(() => {
+    void chrome.runtime.lastError; // 读一下，避免 Unchecked lastError 噪音
     chrome.contextMenus.create({ id: "qd-link", title: "用速下下载此链接", contexts: ["link"] });
     chrome.contextMenus.create({ id: "qd-media", title: "用速下下载此媒体", contexts: ["video", "audio"] });
     chrome.contextMenus.create({ id: "qd-image", title: "用速下下载此图片", contexts: ["image"] });
@@ -674,6 +653,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     filename: undefined,
     referer: tab ? tab.url : undefined,
   };
+  await enrichPayload(payload);
   const ok = await sendToApp(payload);
   if (ok) {
     notify("已交给速下", "下载已添加到速下。");
@@ -751,13 +731,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg && msg.type === "downloadVideo") {
-    const payload = {
+    const raw = {
       url: msg.url,
       filename: msg.filename,
       referer: msg.referer || (sender.tab ? sender.tab.url : undefined),
     };
-    sendToApp(payload).then(async (ok) => {
-      if (!ok) await enqueueTask(payload);
+    enrichPayload(raw).then((payload) => sendToApp(payload)).then(async (ok) => {
+      if (!ok) await enqueueTask(raw);
       sendResponse({ ok });
       if (ok) {
         notify("已交给速下", (msg.filename || "视频") + " 正在下载");

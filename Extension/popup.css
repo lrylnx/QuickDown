@@ -29,7 +29,7 @@ body {
 .status.connected { color: #2e9e44; }
 .status.offline { color: #d33; }
 
-.switch-row, .mode-row {
+.switch-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -68,13 +68,6 @@ body {
 
 .switch-row input:checked + .switch::after {
   left: 18px;
-}
-
-.mode-row select {
-  font-size: 12px;
-  padding: 3px 6px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
 }
 
 .buttons {
