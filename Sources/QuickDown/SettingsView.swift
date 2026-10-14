@@ -382,7 +382,7 @@ struct ExtensionSettingsView: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("本地服务端口：\(model.serverPort > 0 ? "\(model.serverPort)" : "未启动")")
-                    Text("扩展通过 127.0.0.1 与速下通信")
+                    Text("App 未运行时，扩展会自动启动速下并交接当次下载")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -457,6 +457,8 @@ struct ExtensionSettingsView: View {
             try? fm.removeItem(atPath: dir.appendingPathComponent("BrowserExtension.crx").path)
             try? fm.copyItem(at: bundledCRX, to: dir.appendingPathComponent("BrowserExtension.crx"))
         }
+        do { try BrowserIntegration.register(appURL: Bundle.main.bundleURL, extensionPaths: [dir]) }
+        catch { return (dir, "⚠️ 自动启动服务注册失败：\(error.localizedDescription)") }
         return (dir, nil)
     }
 

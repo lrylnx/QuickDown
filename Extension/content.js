@@ -224,7 +224,7 @@
       : guessName(url);
     try {
       const response = await chrome.runtime.sendMessage({ type: "downloadVideo", url, filename });
-      if (row) { row.textContent = response && response.ok ? "✓ 已交给速下" : "✕ 未连接速下，本次已丢弃"; }
+      if (row) { row.textContent = response && response.ok ? "✓ 已交给速下" : "✕ 无法启动速下，本次已丢弃"; }
     } catch (e) {
       if (row) { row.textContent = "✕ 发送失败"; }
     }

@@ -68,6 +68,7 @@ struct MainView: View {
             StatusItemController.shared.setOpenConfirmWindow {
                 action(id: "confirm")
             }
+            model.startCaptureServerIfNeeded()
         }
     }
 

@@ -14,7 +14,7 @@ final class AppModel: ObservableObject {
     @Published var records: [DownloadRecord] = []
     @Published var selectedID: UUID?
     @Published var speeds: [UUID: Double] = [:]
-    @Published var serverPort: UInt16 = 10007
+    @Published var serverPort: UInt16 = 0
     @Published var showAddSheet = false
     /// 等待确认的接管任务 id 队列（确认窗口逐个展示）
     @Published var confirmQueue: [UUID] = []
@@ -45,7 +45,9 @@ final class AppModel: ObservableObject {
                   let id = UUID(uuidString: uuidString) else { return }
             Task { @MainActor in self.enqueueConfirm(id) }
         }
-        startServer()
+        // App 每次启动刷新本地主机路径，覆盖手动拖入安装和移动 App 的场景。
+        do { try BrowserIntegration.register(appURL: Bundle.main.bundleURL) }
+        catch { NSLog("QuickDown: 原生启动服务注册失败：%@", error.localizedDescription) }
         applyAppearance(SettingsStore.shared.settings.appearance) // 启动时恢复用户选择的外观
         refresh()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -105,6 +107,13 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: - 服务器
+
+    /// 等 SwiftUI 的主窗口/确认窗口动作注册后再对浏览器开放服务。
+    /// 冷启动时若过早接收 /add，确认窗口的 openWindow 动作可能尚未捕获。
+    func startCaptureServerIfNeeded() {
+        guard server == nil else { return }
+        startServer()
+    }
 
     func startServer() {
         let port = SettingsStore.shared.settings.serverPort

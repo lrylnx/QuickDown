@@ -1,5 +1,5 @@
 // 速下浏览器接管：同步注册下载监听；冷启动先暂停再读取设置。
-// 每次操作只发送一次，离线直接丢弃。App 会话与操作时间共同阻止跨启动补发。
+// App 离线时通过 Native Messaging 即时启动；只交接当次任务，不保存离线队列。
 // 保留文件过滤、身份补全、视频嗅探、右键菜单与 App 端确认设置。
 
 const PORTS = [10007, 10008, 10009, 10010, 10011, 10012, 10013, 10014, 10015, 10016];
@@ -7,6 +7,9 @@ const DEFAULTS = { mode: "auto", filter: "all", excluded: "", sniff: true, sniff
 const ACTIVE_PORT_KEY = "qd_active_port";
 const QUEUE_KEY = "qd_pending_queue";
 const HANDOFF_TTL = 3000;
+const LAUNCH_TTL = 12000;
+const NATIVE_HOST = "com.quickdown.bridge";
+let launching = null;
 
 // ============================================================================
 // 设置：内存预加载（hot path 绝不读 storage）
@@ -130,15 +133,58 @@ for (const store of [chrome.storage.session, chrome.storage.local]) {
 }
 
 function discardNotice() {
-  notify("下载未交给速下", "速下未运行或连接失败，本次下载已丢弃。打开速下后请重新点击下载。");
+  notify("下载未交给速下", "无法启动或连接速下，本次下载已丢弃。请安装新版 App 并打开一次，再重新点击下载。");
 }
 
-// 从点击/下载事件开始连接，先确认在线，再读取 Cookie；全程不重新发现或重试。
+// 合并同时到来的启动请求。浏览器只传启动指令，不把 URL/Cookie 写入原生主机。
+async function launchApp() {
+  if (launching) return launching;
+  launching = new Promise((resolve) => {
+    let settled = false;
+    const finish = (connection) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(connection);
+    };
+    const timer = setTimeout(() => finish(null), 10000);
+    try {
+      chrome.runtime.sendNativeMessage(NATIVE_HOST, { action: "launch" }, (response) => {
+        const error = chrome.runtime.lastError;
+        if (error || !response || !response.ok || response.name !== "QuickDown" ||
+            response.protocol !== 2 || !PORTS.includes(response.port) ||
+            typeof response.session !== "string" || !response.session ||
+            !Number.isFinite(response.startedAt)) { finish(null); return; }
+        activePort = response.port;
+        finish({ port: response.port, session: response.session, startedAt: response.startedAt });
+      });
+    } catch { finish(null); }
+  });
+  try { return await launching; }
+  finally { launching = null; }
+}
+
+// 状态检查/嗅探同步只探测；只有明确的下载或“打开 App”操作才启动应用。
 async function handoff(payload, capturedAt = Date.now(), connectionPromise = findConnection()) {
-  const connection = await connectionPromise;
-  if (!connection || connection.startedAt > capturedAt || Date.now() - capturedAt > HANDOFF_TTL) return false;
+  try {
+    if (typeof payload.url !== "string" || !["http:", "https:"].includes(new URL(payload.url).protocol)) return false;
+  } catch { return false; }
+  let connection = await connectionPromise;
+  let sendAt = capturedAt;
+  if (!connection) {
+    if (Date.now() - capturedAt > HANDOFF_TTL) return false;
+    connection = await launchApp();
+    if (!connection || Date.now() - capturedAt > LAUNCH_TTL) return false;
+    // 明确的启动操作成功后，只给当次请求签发新的短期交接时间。
+    // /add 仍绑定刚启动的 App 会话，重启/迟到请求不能进入以后启动的 App。
+    sendAt = Date.now();
+  } else if (connection.startedAt > capturedAt) {
+    // App 在当次探测期间自行启动，按当前会话即时交接。
+    sendAt = Date.now();
+  }
+  if (Date.now() - capturedAt > LAUNCH_TTL || Date.now() - sendAt > HANDOFF_TTL) return false;
   await enrichPayload(payload);
-  return sendToApp(payload, connection, capturedAt);
+  return sendToApp(payload, connection, sendAt);
 }
 
 // ============================================================================
@@ -589,6 +635,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // ============================================================================
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === "openApp") {
+    (async () => {
+      const connection = await findConnection() || await launchApp();
+      if (!connection) { sendResponse({ ok: false }); return; }
+      try {
+        const response = await localRequest(connection.port, "/activate", {}, 1500);
+        sendResponse({ ok: response.ok });
+      } catch { sendResponse({ ok: false }); }
+    })();
+    return true;
+  }
   if (msg && msg.type === "getStatus") {
     ensurePort().then((port) => sendResponse({ connected: !!port, port }));
     return true;

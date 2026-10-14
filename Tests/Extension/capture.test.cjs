@@ -8,7 +8,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 async function extension(options = {}) {
   const listeners = {};
-  const calls = { cancel: [], pause: [], resume: [], adds: [], notices: [], erase: [] };
+  const calls = { cancel: [], pause: [], resume: [], adds: [], notices: [], erase: [], native: 0 };
   const session = { qd_pending_queue: [{ url: 'https://old.example/file.zip' }] };
   const local = { ...session };
   let online = options.online !== false;
@@ -31,7 +31,15 @@ async function extension(options = {}) {
       }, async set() {} },
       session: store(session), local: store(local), onChanged: event('storage'),
     },
-    runtime: { onInstalled: event('installed'), onStartup: event('startup'), onMessage: event('message') },
+    runtime: { sendNativeMessage(host, message, callback) {
+      calls.native++;
+      assert.equal(host, 'com.quickdown.bridge'); assert.equal(message.action, 'launch');
+      setImmediate(() => {
+        if (!options.launch) { callback({ ok: false, error: 'host_not_found' }); return; }
+        online = true; startedAt = Date.now();
+        callback({ ok: true, name: 'QuickDown', protocol: 2, port: 10007, session: appSession, startedAt });
+      });
+    }, onInstalled: event('installed'), onStartup: event('startup'), onMessage: event('message') },
     downloads: {
       onCreated: event('created'), onChanged: event('changed'),
       async pause(id) { calls.pause.push(id); }, async resume(id) { calls.resume.push(id); },
@@ -52,6 +60,7 @@ async function extension(options = {}) {
       if (url.endsWith('/integration')) return { ok: true, async text() {
         return JSON.stringify({ name: options.impostor ? 'OtherApp' : 'QuickDown', protocol: 2, session: appSession, startedAt });
       } };
+      if (url.endsWith('/activate')) return { ok: true, async text() { return 'ok'; } };
       if (url.endsWith('/sniff')) return { ok: true, async text() { return 'on'; } };
       if (url.endsWith('/add')) {
         calls.adds.push({ ...JSON.parse(init.body), headers: init.headers });
@@ -109,8 +118,8 @@ test('cold worker with capture enabled pauses then cancels and sends', async () 
   const e = await extension({ cold: true }); const task = e.capture(); await tick(); e.releaseSettings(); await task;
   assert.deepEqual(e.calls.cancel, [1]); assert.equal(e.calls.adds.length, 1);
 });
-test('rejects an App that started after the download event', async () => {
-  const e = await extension(); e.restart(); await e.capture(); assert.equal(e.calls.adds.length, 0);
+test('an App started during the current operation accepts that operation', async () => {
+  const e = await extension(); e.restart(); await e.capture(); assert.equal(e.calls.adds.length, 1);
 });
 test('rejects another application on QuickDown ports', async () => {
   const e = await extension({ impostor: true }); await e.capture(); assert.equal(e.calls.adds.length, 0);
@@ -147,4 +156,40 @@ test('RFC 5987 UTF-8 filename takes precedence over plain filename', async () =>
   ] });
   await e.capture(1, { url: 'https://example.com/download', filename: '' });
   assert.equal(e.calls.adds[0].filename, '测试.zip');
+});
+
+test('offline download launches App and hands off the current payload only', async () => {
+  const e = await extension({ online: false, launch: true }); await e.capture();
+  assert.equal(e.calls.native, 1); assert.equal(e.calls.adds.length, 1);
+  assert.equal(e.session.qd_pending_queue, undefined);
+});
+test('concurrent offline downloads share one launch but each is handed off once', async () => {
+  const e = await extension({ online: false, launch: true });
+  await Promise.all([e.capture(1), e.capture(2), e.capture(3)]);
+  assert.equal(e.calls.native, 1); assert.equal(e.calls.adds.length, 3);
+});
+test('status, reconnect and background alarms never launch App', async () => {
+  const e = await extension({ online: false, launch: true });
+  await e.message({ type: 'getStatus' }); await e.message({ type: 'recheck' });
+  e.emit('alarm', { name: 'qd-keepalive' }); await tick();
+  assert.equal(e.calls.native, 0); assert.equal(e.calls.adds.length, 0);
+});
+test('video button and context menu can launch App', async () => {
+  const e = await extension({ online: false, launch: true });
+  assert.equal((await e.message({ type: 'downloadVideo', url: 'https://example.com/video.mp4' })).ok, true);
+  assert.equal(e.calls.native, 1); assert.equal(e.calls.adds.length, 1);
+  e.online(false); e.emit('menu', { menuItemId: 'qd-image', srcUrl: 'https://example.com/image.jpg' });
+  await tick(); await tick(); await tick();
+  assert.equal(e.calls.native, 2); assert.equal(e.calls.adds.length, 2);
+});
+
+test('open App button launches without creating a download', async () => {
+  const e = await extension({ online: false, launch: true });
+  assert.equal((await e.message({ type: 'openApp' })).ok, true);
+  assert.equal(e.calls.native, 1); assert.equal(e.calls.adds.length, 0);
+});
+test('invalid video URL never launches App', async () => {
+  const e = await extension({ online: false, launch: true });
+  assert.equal((await e.message({ type: 'downloadVideo', url: 'javascript:alert(1)' })).ok, false);
+  assert.equal(e.calls.native, 0); assert.equal(e.calls.adds.length, 0);
 });

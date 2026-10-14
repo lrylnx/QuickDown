@@ -64,7 +64,7 @@ open dist/QuickDown.app         # 首次启动
 扩展功能：
 - **接管开关**：点击工具栏扩展图标即可开启/关闭下载接管
 - **接管行为**：弹确认窗口 / 弹主窗口在速下 App「设置 → 浏览器扩展」里配置（扩展端不再单独设置）
-- **离线行为**：App 未启动或连接失败时，已拦截的下载直接丢弃；打开 App 后请重新点击下载。扩展不保存离线任务，也不在启动后补发。
+- **自动启动 App**：App 未运行时，下载或“打开速下”按钮会通过原生启动服务唤起 App，等服务就绪后交接当次下载。启动失败则提示并丢弃，不保存等待队列。
 - **接管范围**：所有文件 / 仅媒体与安装包；可排除指定站点
 - **右键菜单**：链接、视频、图片一键交给速下
 
@@ -91,8 +91,8 @@ open dist/QuickDown.app         # 首次启动
 **Q：浏览器里点击下载后，浏览器显示"已取消"或一个 1 字节的残留文件？**
 这是正常现象。扩展接管下载时会取消浏览器的下载任务（浏览器会留下一个 0~1 字节的 `.crdownload` 临时文件，浏览器右上角会短暂闪过下载动画——这是浏览器自身的下载提示，无法去除），**真正的文件由速下在下载目录中完整下载**（完成后有系统通知）。速下会在接管时自动弹出主窗口显示进度（可在设置 → 浏览器扩展中关闭"接管下载时弹出主窗口"）。检查 `~/Downloads` 或速下主窗口的列表即可看到完整文件。
 
-**Q：App 未启动时点击下载，会在启动后自动下载吗？**
-不会。开启接管时，当次下载会被拦截并丢弃；打开 App 后需要重新点击。新版扩展会清除旧版离线等待队列。接管开关关闭或符合排除规则时，下载仍由浏览器处理。App 和扩展需一起更新至 1.6.0，新版扩展只连接支持即时会话协议的 App。
+**Q：App 未启动时点击下载会怎样？**
+1.7.0 起，扩展会立即调用本地原生启动服务打开 App，等待服务就绪后交接当次任务，原有确认窗口设置仍有效。启动失败或超时会提示并丢弃，不在之后重新补发。接管开关关闭或符合排除规则时，仍由浏览器下载。App 和扩展需一起更新至 1.7.0；一键安装器会注册启动服务，手动安装请先打开 App 一次，或运行 App 内的扩展安装向导。扩展新增 `nativeMessaging` 权限，升级后若浏览器提示需要授权，请重新启用扩展。
 
 **Q：扩展改了代码后不生效？**
 在 `chrome://extensions` 中找到速下扩展，点击扩展卡片上的 **↻ 刷新** 按钮重新加载。
@@ -154,14 +154,15 @@ QuickDown/
 
 MIT — 自由使用、修改、分发。
 
-### 浏览器接管回归验证（1.6.0）
+### 浏览器接管回归验证（1.7.0）
 
 ```bash
 node --test Tests/Extension/capture.test.cjs
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter BrowserCaptureSessionTests
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter 'BrowserCaptureSessionTests|BrowserIntegrationTests'
 node Tests/Extension/browser-smoke.cjs
+node Tests/Extension/browser-native-smoke.cjs
 ```
 
-浏览器测试需要 Node 22+，默认使用 `/Applications/Thorium.app/Contents/MacOS/Thorium`；可通过 `QD_BROWSER_BINARY` 指定支持 CDP `Extensions.loadUnpacked` 的 Chromium 浏览器。测试使用临时浏览器配置、临时扩展副本和模拟 App 服务，不修改日常浏览器资料；验证真实下载事件、离线丢弃、上线不补发、Cookie 与文件名传递、极小文件清理。App 真实 HTTP 会话校验由 Swift 测试覆盖。
+浏览器测试需要 Node 22+，默认使用 `/Applications/Thorium.app/Contents/MacOS/Thorium`；可通过 `QD_BROWSER_BINARY` 指定支持 CDP `Extensions.loadUnpacked` 的 Chromium 浏览器。测试使用临时浏览器配置、临时扩展副本和模拟 App 服务，不修改日常浏览器资料；验证真实下载事件、离线丢弃、上线不补发、Cookie 与文件名传递、极小文件清理。App 真实 HTTP 会话校验由 Swift 测试覆盖。原生启动测试把同一助手源码编译到临时 App（仅替换测试端口与 Bundle ID），验证真实 Native Messaging → `/usr/bin/open` → 当次下载交接，不影响正在运行的日常 App。
 
-参考方案：[XDM 的下载接管与 Native Messaging](https://github.com/subhra74/xdm-integration-module/blob/main/chrome/lib/watcher.js)。此项目保留原有功能和本地 HTTP/NDM WebSocket 兼容，使用即时会话校验适配“App 未启动即丢弃”的要求，没有引入自动启动 App 的 Native Messaging 主机。
+参考方案：[XDM 的下载接管与 Native Messaging](https://github.com/subhra74/xdm-integration-module/blob/main/chrome/lib/watcher.js)。此项目保留原有功能和本地 HTTP/NDM WebSocket 兼容，使用即时会话校验防止迟到请求进入后续启动的 App，1.7.0 新增 Native Messaging 主机 `QuickDownBridge`，只接收启动指令，不存储下载地址或 Cookie；App 启动后仍通过绑定会话的 HTTP 交接任务。

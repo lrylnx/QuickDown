@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-VERSION="1.6.0"
+VERSION="1.7.0"
 PKG_NAME="速下下载管理器-通用版"
 PKG_DIR="$ROOT/dist/$PKG_NAME"
 ZIP="$ROOT/dist/$PKG_NAME.zip"
@@ -31,7 +31,7 @@ find "$PKG_DIR" -name ".DS_Store" -delete
 echo "==> 3/5 写入安装说明与脚本"
 cat > "$PKG_DIR/安装说明.txt" <<'EOF'
 ══════════════════════════════════════════════════════════
-  速下 QuickDown — macOS 中文下载管理器（通用版 v1.6.0）
+  速下 QuickDown — macOS 中文下载管理器（通用版 v1.7.0）
 ══════════════════════════════════════════════════════════
 
 【这是什么】
@@ -86,8 +86,10 @@ cat > "$PKG_DIR/安装说明.txt" <<'EOF'
 常见问题
 ──────────────────────────────
 Q: 速下没启动时点击下载会怎样？
-  开启接管时会拦截并丢弃，不存入等待队列。
-  打开速下后请重新点击下载。关闭接管或被过滤排除的下载由浏览器处理。
+  新版扩展会自动打开速下，服务就绪后交接当次下载。
+  启动失败会提示并丢弃，不积压到以后补发。
+  手动安装 App 时请打开一次，以注册启动服务；一键安装器会自动注册。
+  关闭接管或被过滤排除的下载仍由浏览器处理。
 
 Q: 浏览器下载被取消只留下 1 字节？
   正常现象。速下接管后取消浏览器下载（留下 0~1 字节残影），
@@ -138,37 +140,9 @@ chmod -R u+rwX,go+rX /Applications/QuickDown.app
 xattr -dr com.apple.quarantine /Applications/QuickDown.app 2>/dev/null || true
 
 EXT_SRC="/Applications/QuickDown.app/Contents/Resources/BrowserExtension"
-echo "==> 注册浏览器扩展（Thorium / Chrome / Edge 等）"
-EXT_ID=""
-if command -v python3 >/dev/null 2>&1; then
-  EXT_ID=$(python3 - "$EXT_SRC" <<'PYEOF'
-import sys, hashlib
-path = sys.argv[1]
-print(hashlib.sha256(path.encode("utf-8")).digest()[:16].hex())
-PYEOF
-)
-fi
-
+echo "==> 注册浏览器扩展与原生启动服务"
+bash /Applications/QuickDown.app/Contents/Resources/install_extension.sh
 REGISTERED=""
-for profile in \
-  "$HOME/Library/Application Support/Thorium" \
-  "$HOME/Library/Application Support/Google/Chrome" \
-  "$HOME/Library/Application Support/Microsoft Edge" \
-  "$HOME/Library/Application Support/Chromium" \
-  "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"; do
-  if [ -d "$profile" ]; then
-    mkdir -p "$profile/External Extensions"
-    if [ -n "$EXT_ID" ]; then
-      cat > "$profile/External Extensions/$EXT_ID.json" <<JSONEOF
-{
-  "path": "$EXT_SRC",
-  "allow_file_access": true
-}
-JSONEOF
-      REGISTERED="$profile"
-    fi
-  fi
-done
 
 echo ""
 echo "=================================================="

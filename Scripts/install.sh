@@ -28,42 +28,9 @@ xattr -dr com.apple.quarantine "$APP_DST" 2>/dev/null || true
 
 EXT_SRC="$APP_DST/Contents/Resources/BrowserExtension"
 
-echo "==> 注册浏览器扩展"
-EXT_ID=""
-if command -v python3 >/dev/null 2>&1; then
-  EXT_ID=$(python3 - "$EXT_SRC" <<'PYEOF'
-import sys, hashlib
-path = sys.argv[1]
-# Chromium GenerateIdForPath: SHA256(绝对路径) 前 16 字节的 hex
-digest = hashlib.sha256(path.encode("utf-8")).digest()
-print(digest[:16].hex())
-PYEOF
-)
-fi
-echo "扩展 ID: ${EXT_ID:-（无法计算）}"
-
+echo "==> 注册浏览器扩展与原生启动服务"
+bash "$ROOT/Scripts/install_extension.sh"
 INSTALLED=""
-for profile_dir in \
-  "$HOME/Library/Application Support/Thorium" \
-  "$HOME/Library/Application Support/Google/Chrome" \
-  "$HOME/Library/Application Support/Microsoft Edge" \
-  "$HOME/Library/Application Support/Chromium" \
-  "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"; do
-  if [ -d "$profile_dir" ]; then
-    ext_dir="$profile_dir/External Extensions"
-    mkdir -p "$ext_dir"
-    if [ -n "$EXT_ID" ]; then
-      cat > "$ext_dir/$EXT_ID.json" <<EOF
-{
-  "path": "$EXT_SRC",
-  "allow_file_access": true
-}
-EOF
-      echo "已写入: $ext_dir/$EXT_ID.json"
-      INSTALLED="$profile_dir"
-    fi
-  fi
-done
 
 echo ""
 echo "=================================================="

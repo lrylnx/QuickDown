@@ -31,6 +31,33 @@ if [ -n "$TARGET_USER" ]; then
 fi
 [ -n "$USER_HOME" ] || USER_HOME="$HOME"
 
+# 注册 Native Messaging：浏览器能启动 App，安装后无需先手动打开。
+BRIDGE="$(dirname "$(dirname "$EXT_PATH")")/MacOS/QuickDownBridge"
+[ -x "$BRIDGE" ] || BRIDGE="/Applications/QuickDown.app/Contents/MacOS/QuickDownBridge"
+if [ -x "$BRIDGE" ]; then
+  "$BRIDGE" --register-home "$USER_HOME" --extension-path "$EXT_PATH" || exit 1
+  if [ -n "$TUID" ]; then
+    python3 - "$USER_HOME" "$TUID" "$TGID" <<'PYCHOWN'
+import os, sys
+base = os.path.join(sys.argv[1], "Library/Application Support")
+browsers = ["Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev", "Google/Chrome Canary",
+            "Google/ChromeForTesting", "Microsoft Edge", "Thorium", "BraveSoftware/Brave-Browser",
+            "Chromium", "Vivaldi", "Arc/User Data", "com.operasoftware.Opera"]
+for browser in browsers:
+    root = os.path.join(base, browser, "NativeMessagingHosts")
+    manifest = os.path.join(root, "com.quickdown.bridge.json")
+    if os.path.isfile(manifest):
+        current = root
+        while current != base:
+            os.chown(current, int(sys.argv[2]), int(sys.argv[3]))
+            current = os.path.dirname(current)
+        os.chown(manifest, int(sys.argv[2]), int(sys.argv[3]))
+PYCHOWN
+  fi
+else
+  echo "⚠️ 未找到原生启动服务，请更新 App"
+fi
+
 # ----------------------------------------------------------------------------
 # 步骤 0（升级安装关键）：原地刷新所有旧版扩展副本
 #
@@ -149,7 +176,7 @@ PYEOF
 
 EXT_ID=$(python3 - "$EXT_PATH" <<'PYEOF'
 import sys, hashlib
-print(hashlib.sha256(sys.argv[1].encode()).digest()[:16].hex())
+print("".join(chr(97 + int(c, 16)) for c in hashlib.sha256(sys.argv[1].encode()).digest()[:16].hex()))
 PYEOF
 )
 echo "扩展 ID: $EXT_ID"

@@ -14,7 +14,7 @@ function setStatus(connected, port) {
     statusEl.textContent = "已连接（端口 " + port + "）";
     statusEl.className = "status connected";
   } else {
-    statusEl.textContent = "未连接：请先打开速下应用";
+    statusEl.textContent = "未运行：下载时将自动打开速下";
     statusEl.className = "status offline";
   }
 }
@@ -50,11 +50,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 document.getElementById("openApp").addEventListener("click", async () => {
-  const resp = await chrome.runtime.sendMessage({ type: "getStatus" });
-  const port = (resp && resp.port) || 10007;
-  // 唤起速下应用窗口
-  await fetch("http://127.0.0.1:" + port + "/activate").catch(() => {});
-  window.close();
+  const resp = await chrome.runtime.sendMessage({ type: "openApp" });
+  if (resp && resp.ok) window.close();
+  else {
+    statusEl.textContent = "启动失败：请安装新版速下并打开一次";
+    statusEl.className = "status offline";
+  }
 });
 
 document.getElementById("openOptions").addEventListener("click", () => {

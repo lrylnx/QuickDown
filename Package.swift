@@ -21,6 +21,11 @@ let package = Package(
             dependencies: ["QuickDownCore"],
             path: "Sources/QuickDownCLI"
         ),
+        .executableTarget(
+            name: "QuickDownBridge",
+            dependencies: ["QuickDownCore"],
+            path: "Sources/QuickDownBridge"
+        ),
         .testTarget(
             name: "QuickDownCoreTests",
             dependencies: ["QuickDownCore"],

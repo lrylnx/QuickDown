@@ -28,16 +28,28 @@ case "$CONFIG" in
     BIN_X64="$ROOT/.build-x64/release/QuickDown"
     DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox -c release --product QuickDown \
       --triple x86_64-apple-macosx13.0 --scratch-path "$ROOT/.build-x64"
+    for QD_ARCH in arm64 x86_64; do
+      if [ "$QD_ARCH" = arm64 ]; then QD_SCRATCH="$ROOT/.build-a64"; else QD_SCRATCH="$ROOT/.build-x64"; fi
+      DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox -c release --product QuickDownBridge \
+        --triple "$QD_ARCH-apple-macosx13.0" --scratch-path "$QD_SCRATCH"
+    done
     mkdir -p "$ROOT/.build/universal"
+    lipo -create "$ROOT/.build-a64/release/QuickDownBridge" "$ROOT/.build-x64/release/QuickDownBridge" \
+      -output "$ROOT/.build/universal/QuickDownBridge"
+    BRIDGE_BIN="$ROOT/.build/universal/QuickDownBridge"
     lipo -create "$BIN_A64" "$BIN_X64" -output "$ROOT/.build/universal/QuickDown"
     BIN="$ROOT/.build/universal/QuickDown"
     ;;
   release)
     DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox -c release --product QuickDown
+    DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox -c release --product QuickDownBridge
+    BRIDGE_BIN=".build/release/QuickDownBridge"
     BIN=".build/release/QuickDown"
     ;;
   *)
     DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox --product QuickDown
+    DEVELOPER_DIR="$DEV_DIR" swift build --disable-sandbox --product QuickDownBridge
+    BRIDGE_BIN=".build/debug/QuickDownBridge"
     BIN=".build/debug/QuickDown"
     ;;
 esac
@@ -54,6 +66,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "==> 组装 .app"
 cp "$BIN" "$APP/Contents/MacOS/QuickDown"
+cp "$BRIDGE_BIN" "$APP/Contents/MacOS/QuickDownBridge"
+codesign --force --sign - "$APP/Contents/MacOS/QuickDownBridge"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
@@ -61,6 +75,8 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 # 内置浏览器扩展（文件夹 + 拖拽安装用 CRX）
 cp -R Extension "$APP/Contents/Resources/BrowserExtension"
 cp Resources/BrowserExtension.crx "$APP/Contents/Resources/BrowserExtension.crx"
+cp Scripts/crx/pub.der "$APP/Contents/Resources/BrowserExtensionPublicKey.der"
+cp Scripts/install_extension.sh "$APP/Contents/Resources/install_extension.sh"
 # 清理 macOS 扩展属性文件
 find "$APP" -name ".DS_Store" -delete
 
