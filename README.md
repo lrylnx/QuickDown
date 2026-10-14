@@ -61,6 +61,8 @@ open dist/QuickDown.app         # 首次启动
 /Applications/QuickDown.app/Contents/Resources/BrowserExtension
 ```
 
+安装向导的第二步可直接拖动提示面板里的扩展文件夹到浏览器，无需寻找 Finder 窗口；也可点击「显示 Finder」打开目录。
+
 扩展功能：
 - **接管开关**：点击工具栏扩展图标即可开启/关闭下载接管
 - **接管行为**：弹确认窗口 / 弹主窗口在速下 App「设置 → 浏览器扩展」里配置（扩展端不再单独设置）

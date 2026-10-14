@@ -191,24 +191,87 @@ struct GeneralSettingsView: View {
 
 // MARK: - 浏览器扩展
 
+/// 安装入口可直接拖入浏览器，不依赖 Finder 的窗口层级。
+@MainActor
+private final class ExtensionDragView: NSView, NSDraggingSource {
+    let directory: URL
+    private let icon: NSImage
+
+    init(directory: URL, frame: NSRect) {
+        self.directory = directory
+        self.icon = NSWorkspace.shared.icon(forFile: directory.path)
+        super.init(frame: frame)
+        toolTip = "将此文件夹拖到浏览器的扩展管理页面"
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("browser-extension 文件夹，拖动到浏览器扩展页面安装")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.controlBackgroundColor.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
+        icon.draw(in: NSRect(x: 10, y: 15, width: 36, height: 36))
+        ("拖动此文件夹安装扩展" as NSString).draw(at: NSPoint(x: 54, y: 36),
+            withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.labelColor])
+        ("browser-extension" as NSString).draw(at: NSPoint(x: 54, y: 16),
+            withAttributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseDragged(with event: NSEvent) {
+        let item = NSDraggingItem(pasteboardWriter: directory as NSURL)
+        item.setDraggingFrame(NSRect(x: 10, y: 15, width: 36, height: 36), contents: icon)
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .copy
+    }
+}
+
+@MainActor
+private enum ExtensionFinder {
+    static func reveal(_ directory: URL) async {
+        // Finder 请求是异步的；先显示目录，稍后激活 Finder，而非紧接着激活速下。
+        NSWorkspace.shared.activateFileViewerSelecting([directory])
+        try? await Task.sleep(nanoseconds: 350_000_000)
+        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?
+            .activate(options: [.activateAllWindows])
+    }
+}
+
 /// 安装向导浮动面板：浮动层级（永远在最上层）+ 左侧定位。
 /// 使用异步 continuation 而非 runModal —— 不阻塞主线程，按钮事件正常派发
 @MainActor
 final class WizardAlert: NSObject {
     private var panel: NSWindow!
     private var continuation: CheckedContinuation<Int, Never>?
+    private var extensionDirectory: URL?
 
     /// 显示向导弹窗，await 返回点击的按钮序号（0 开始）
     func show(title: String, message: String, buttons: [String],
-              verticalFraction: CGFloat = 0.5, width: CGFloat = 400) async -> Int {
-        // 估算高度：按行数
-        let lineCount = message.components(separatedBy: "\n").count
-        let height = max(180, 80 + CGFloat(lineCount) * 17 + 60)
+              verticalFraction: CGFloat = 0.5, width: CGFloat = 400,
+              extensionDirectory: URL? = nil) async -> Int {
+        // 根据实际换行计算高度，较长的浏览器名称/目录路径也不会截断说明。
+        let textBounds = (message as NSString).boundingRect(
+            with: NSSize(width: width - 36, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.systemFont(ofSize: 13)])
+        let extraHeight: CGFloat = extensionDirectory == nil ? 0 : 80
+        let height = max(180, ceil(textBounds.height) + 118 + extraHeight)
+        self.extensionDirectory = extensionDirectory
 
-        let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-                             styleMask: [.titled],
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                             styleMask: extensionDirectory == nil ? [.titled] : [.titled, .nonactivatingPanel],
                              backing: .buffered, defer: false)
         panel.title = title
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = extensionDirectory != nil
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.level = .floating          // 浮动层级：永远在 Finder/浏览器之上
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
@@ -220,12 +283,22 @@ final class WizardAlert: NSObject {
 
         // 说明文字（可选中复制）
         let label = NSTextField(wrappingLabelWithString: message)
-        label.frame = NSRect(x: 16, y: 70, width: width - 32, height: height - 110)
+        label.frame = NSRect(x: 16, y: 70 + extraHeight, width: width - 32, height: height - 110 - extraHeight)
         label.isEditable = false
         label.isSelectable = true
         label.font = NSFont.systemFont(ofSize: 13)
         label.textColor = .labelColor
         content.addSubview(label)
+
+        if let directory = extensionDirectory {
+            let dragView = ExtensionDragView(directory: directory,
+                frame: NSRect(x: 16, y: 74, width: width - 154, height: 66))
+            content.addSubview(dragView)
+            let reveal = NSButton(title: "显示 Finder", target: self, action: #selector(revealFinder))
+            reveal.bezelStyle = .rounded
+            reveal.frame = NSRect(x: width - 128, y: 92, width: 112, height: 28)
+            content.addSubview(reveal)
+        }
 
         // 按钮：从右往左排列（macOS 惯例：第一个按钮在最右）
         var bx = width - 16
@@ -255,9 +328,19 @@ final class WizardAlert: NSObject {
         // 显示并等待按钮点击（异步，不阻塞主线程）
         return await withCheckedContinuation { cont in
             continuation = cont
-            NSApp.activate(ignoringOtherApps: true)
-            panel.makeKeyAndOrderFront(nil)
+            if extensionDirectory == nil {
+                NSApp.activate(ignoringOtherApps: true)
+                panel.makeKeyAndOrderFront(nil)
+            } else {
+                // 非激活面板保持可见，让 Finder/浏览器继续留在前台。
+                panel.orderFrontRegardless()
+            }
         }
+    }
+
+    @objc private func revealFinder() {
+        guard let directory = extensionDirectory else { return }
+        Task { @MainActor in await ExtensionFinder.reveal(directory) }
     }
 
     @objc private func clicked(_ sender: NSButton) {
@@ -493,23 +576,23 @@ struct ExtensionSettingsView: View {
                 return
             }
 
-            // 4. 在 Finder 中选中扩展文件夹（Finder 弹到最前）
-            NSWorkspace.shared.activateFileViewerSelecting([extDir])
+            // 4. 等待 Finder 显示目录并激活，再展示不会抢焦点的第二步面板。
+            await ExtensionFinder.reveal(extDir)
 
             // 5. 第二步：拖入扩展页面完成安装（浮动面板在左侧中部，不挡 Finder）
             let alert2 = WizardAlert()
             _ = await alert2.show(
                 title: "第二步：拖入扩展安装",
                 message: """
-                Finder 已打开并选中扩展文件夹，把它拖到 \(browser.name) 的扩展页面：
-                ① 把「browser-extension」文件夹（或 BrowserExtension.crx）拖到扩展页面任意位置
+                可直接拖动下方文件夹到 \(browser.name) 的扩展页面，无需寻找 Finder 窗口：
+                ① 拖动下方「browser-extension」文件夹到扩展页面任意位置
                 ② 弹出确认时点「添加扩展程序」
                 ③ 扩展出现在列表中即安装成功
 
                 文件位置：\(extDir.path)
                 """,
                 buttons: ["我已安装完成", "稍后再说"],
-                verticalFraction: 0.5)
+                verticalFraction: 0.15, width: 440, extensionDirectory: extDir)
 
             // 6. 恢复速下窗口
             WizardWindowManager.shared.restoreAll()
@@ -523,7 +606,7 @@ struct ExtensionSettingsView: View {
             return
         }
         if FileManager.default.fileExists(atPath: ext.url.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([ext.url])
+            Task { @MainActor in await ExtensionFinder.reveal(ext.url) }
         } else {
             message = "未找到扩展目录"
         }
