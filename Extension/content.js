@@ -223,8 +223,8 @@
       ? (document.title || "video").replace(/[\\/:*?"<>|\n]/g, "_").trim().slice(0, 60) + ".mp4"
       : guessName(url);
     try {
-      await chrome.runtime.sendMessage({ type: "downloadVideo", url, filename });
-      if (row) { row.textContent = "✓ 已交给速下"; }
+      const response = await chrome.runtime.sendMessage({ type: "downloadVideo", url, filename });
+      if (row) { row.textContent = response && response.ok ? "✓ 已交给速下" : "✕ 未连接速下，本次已丢弃"; }
     } catch (e) {
       if (row) { row.textContent = "✕ 发送失败"; }
     }

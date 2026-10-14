@@ -13,6 +13,7 @@ public extension Notification.Name {
 
 public final class LocalServer: @unchecked Sendable {
 
+    private var captureSession = BrowserCaptureSession()
     private var serverFD: Int32 = -1
     private var acceptThread: Thread?
     private let manager: DownloadManager
@@ -28,6 +29,7 @@ public final class LocalServer: @unchecked Sendable {
 
     public func start() throws {
         stop()
+        captureSession = BrowserCaptureSession()
         for offset in 0..<10 {
             let candidate = port &+ UInt16(offset)
             if let fd = bindAndListen(candidate) {
@@ -58,6 +60,8 @@ public final class LocalServer: @unchecked Sendable {
     private func bindAndListen(_ port: UInt16) -> Int32? {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
         var reuse: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
         var addr = sockaddr_in()
@@ -150,11 +154,20 @@ public final class LocalServer: @unchecked Sendable {
         case ("OPTIONS", _):
             // CORS 预检请求：必须返回 2xx（sendResponse 会自动附带 Access-Control-Allow-* 头）
             return (200, "")
+        case ("GET", "/integration"):
+            return (200, "{\"name\":\"QuickDown\",\"protocol\":2,\"session\":\"\(captureSession.id)\",\"startedAt\":\(captureSession.startedAt)}")
         case ("GET", "/ping"):
             return (200, "ok")
         case ("GET", "/"):
             return (200, "{\"name\":\"QuickDown\",\"version\":\"1.0\",\"desc\":\"速下下载管理器本地服务\"}")
         case ("POST", "/add"):
+            // 旧客户端不带这两个头时保留原协议；新版扩展必须绑定同一次 App 启动。
+            if req.headers["x-quickdown-session"] != nil || req.headers["x-quickdown-captured-at"] != nil {
+                guard captureSession.accepts(session: req.headers["x-quickdown-session"],
+                                             capturedAt: req.headers["x-quickdown-captured-at"]) else {
+                    return (409, "{\"error\":\"expired capture\"}")
+                }
+            }
             let result = handleAdd(req.body)
             if result.0 == 200 {
                 let s = SettingsStore.shared.settings
@@ -216,6 +229,7 @@ public final class LocalServer: @unchecked Sendable {
         case 200: reason = "OK"
         case 400: reason = "Bad Request"
         case 404: reason = "Not Found"
+        case 409: reason = "Conflict"
         default: reason = "Error"
         }
         let bodyData = Data(body.utf8)
@@ -223,7 +237,7 @@ public final class LocalServer: @unchecked Sendable {
                    "Content-Type: application/json; charset=utf-8\r\n" +
                    "Access-Control-Allow-Origin: *\r\n" +
                    "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
-                   "Access-Control-Allow-Headers: Content-Type\r\n" +
+                   "Access-Control-Allow-Headers: Content-Type, X-QuickDown-Session, X-QuickDown-Captured-At\r\n" +
                    "Content-Length: \(bodyData.count)\r\n" +
                    "Connection: close\r\n\r\n"
         var out = Data(head.utf8)
@@ -389,6 +403,23 @@ public final class LocalServer: @unchecked Sendable {
         let body = buffer[bodyStart..<(bodyStart + contentLength)]
 
         return HTTPRequest(method: method, path: path, headers: headers, body: Data(body))
+    }
+}
+
+// 新版扩展的即时接管凭据。毫秒时间与 JS Date.now() 一致。
+struct BrowserCaptureSession {
+    let id: String
+    let startedAt: Double
+
+    init(now: Date = Date()) {
+        id = UUID().uuidString
+        startedAt = floor(now.timeIntervalSince1970 * 1000)
+    }
+
+    func accepts(session: String?, capturedAt: String?, now: Date = Date()) -> Bool {
+        guard session == id, let text = capturedAt, let timestamp = Double(text), timestamp.isFinite else { return false }
+        let current = now.timeIntervalSince1970 * 1000
+        return timestamp >= startedAt && timestamp <= current && current - timestamp <= 3000
     }
 }
 

@@ -1,27 +1,12 @@
-// 速下 - 浏览器下载接管 后台服务
-//
-// 接管灵敏度核心设计（参考 Ghost-Downloader-3）：
-// 0. SW 常驻保活：MV3 SW 空闲约 30 秒会被休眠，休眠期间下载到来需要先唤醒 SW，
-//    唤醒耗时内浏览器原生下载已在进行，快速网络下 cancel 执行前文件可能已完成。
-//    每 20 秒调用一次轻量扩展 API 重置空闲计时器，让 SW 永不休眠，
-//    onCreated → cancel 稳定在毫秒级执行 —— 这是 100% 接管的关键。
-// 1. 设置在 SW 启动时预加载到内存，事件 hot path 零异步读取
-// 2. onCreated 单点完整接管，不使用 onDeterminingFilename —— 该事件的 suggest
-//    协议极易产生 "Download must be in progress" / "suggestCallback may not be
-//    called more than once" 控制台报错（详见下载事件监听一节），对接管可靠性
-//    没有实质增益，cancel 之前零 await
-// 3. 并行端口发现 + 活跃端口持久化
-// 4. 任务队列：速下未启动时暂存，启动后自动补发
-// 5. alarms 定期保活 + 队列 flush
-// 6. onChanged 兜底：极小文件在 cancel 落地前已被浏览器下载完成时，
-//    删除磁盘文件并抹掉下载历史（任务早已发给速下），不留浏览器下载痕迹
-// 7. SW 启动时清扫接管浏览器中已在进行中的下载（扩展刚装载 / 浏览器恢复场景）
+// 速下浏览器接管：同步注册下载监听；冷启动先暂停再读取设置。
+// 每次操作只发送一次，离线直接丢弃。App 会话与操作时间共同阻止跨启动补发。
+// 保留文件过滤、身份补全、视频嗅探、右键菜单与 App 端确认设置。
 
 const PORTS = [10007, 10008, 10009, 10010, 10011, 10012, 10013, 10014, 10015, 10016];
 const DEFAULTS = { mode: "auto", filter: "all", excluded: "", sniff: true, sniffApp: true };
 const ACTIVE_PORT_KEY = "qd_active_port";
 const QUEUE_KEY = "qd_pending_queue";
-const MAX_QUEUE = 50;
+const HANDOFF_TTL = 3000;
 
 // ============================================================================
 // 设置：内存预加载（hot path 绝不读 storage）
@@ -30,10 +15,14 @@ const MAX_QUEUE = 50;
 let settings = { ...DEFAULTS };
 let settingsReady = false;
 
-// SW 启动时立即发起异步加载，加载完成前用默认值
-chrome.storage.sync.get(DEFAULTS, (s) => {
-  settings = { ...DEFAULTS, ...s };
-  settingsReady = true;
+// SW 启动时立即加载；下载接管在设置就绪前先暂停。
+const settingsLoaded = new Promise((resolve) => {
+  chrome.storage.sync.get(DEFAULTS, (s) => {
+    void chrome.runtime.lastError;
+    settings = { ...DEFAULTS, ...s };
+    settingsReady = true;
+    resolve();
+  });
 });
 
 // 监听设置变化，实时更新内存
@@ -65,162 +54,116 @@ async function syncSniffFromApp() {
   const port = await ensurePort();
   if (!port) return;
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 1500);
-    const r = await fetch(`http://127.0.0.1:${port}/sniff`, { signal: ctrl.signal });
-    clearTimeout(t);
-    if (!r.ok) return;
-    const on = (await r.text()).trim() !== "off";
+    const response = await localRequest(port, "/sniff", {}, 1500);
+    if (!response.ok) return;
+    const on = response.text.trim() !== "off";
     const cur = await chrome.storage.sync.get({ sniffApp: true });
     if (cur.sniffApp !== on) await chrome.storage.sync.set({ sniffApp: on });
   } catch {}
 }
 
 // ============================================================================
-// Service Worker 常驻保活（100% 接管的关键）
-//
-// Chrome 官方行为：任何扩展 API 调用都会重置 SW 的 30 秒空闲计时器。
-// 每 20 秒调用一次轻量 API，SW 即永不休眠 —— 下载事件到达时无需唤醒，
-// onCreated → cancel 在毫秒级完成，浏览器原生下载来不及开始。
-// 极端情况下 SW 仍被杀掉（如扩展更新），alarms 会在 30 秒内重新唤醒并重建本循环。
-// ============================================================================
-
-function keepAliveTick() {
-  try {
-    chrome.runtime.getPlatformInfo(() => void chrome.runtime.lastError);
-  } catch (e) {}
-}
-
-keepAliveTick();
-setInterval(keepAliveTick, 20 * 1000);
-
-// ============================================================================
-// 存储辅助
-// ============================================================================
-
-const sessionStore = chrome.storage.session || chrome.storage.local;
-
-async function loadActivePortCache() {
-  try {
-    const r = await sessionStore.get(ACTIVE_PORT_KEY);
-    const p = r[ACTIVE_PORT_KEY];
-    if (typeof p === "number" && PORTS.includes(p)) return p;
-  } catch {}
-  return null;
-}
-
-async function saveActivePortCache(port) {
-  try { await sessionStore.set({ [ACTIVE_PORT_KEY]: port }); } catch {}
-}
-
-async function clearActivePortCache() {
-  try { await sessionStore.remove(ACTIVE_PORT_KEY); } catch {}
-}
-
-// ============================================================================
-// 端口发现（并行竞速 + 缓存优先）
+// 即时连接：并行发现 + 合并并发探测。缓存只作优先候选，每次都验证 App 身份。
+// 不依赖保活定时器，不在后台扫描或补发下载。
 // ============================================================================
 
 let activePort = null;
-let lastPingTime = 0;
+let discovery = null;
 
-async function ping(port) {
+async function localRequest(port, path, options = {}, timeout = 500) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 350);
-    const r = await fetch(`http://127.0.0.1:${port}/ping`, { signal: ctrl.signal });
-    clearTimeout(t);
-    return r.ok && (await r.text()) === "ok";
-  } catch {
-    return false;
-  }
-}
-
-// 并行竞速：谁先应谁赢，最多等 400ms
-function findPortParallel() {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timers = [];
-    const done = (port) => {
-      if (settled) return;
-      settled = true;
-      timers.forEach(clearTimeout);
-      resolve(port);
-    };
-    PORTS.forEach((p) => {
-      ping(p).then((ok) => { if (ok) done(p); });
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+      ...options, signal: ctrl.signal, cache: "no-store",
     });
-    timers.push(setTimeout(() => done(null), 400));
-  });
+    const text = await response.text();
+    return { ok: response.ok, text };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-async function findPort() {
-  const cached = await loadActivePortCache();
-  if (cached && await ping(cached)) {
-    activePort = cached;
-    return cached;
-  }
-  const p = await findPortParallel();
-  if (p) {
-    activePort = p;
-    await saveActivePortCache(p);
-  } else {
-    activePort = null;
-    await clearActivePortCache();
-  }
-  return p;
+async function probeApp(port) {
+  try {
+    const response = await localRequest(port, "/integration");
+    if (!response.ok) return null;
+    const info = JSON.parse(response.text);
+    if (info.name !== "QuickDown" || info.protocol !== 2 ||
+        typeof info.session !== "string" || !info.session ||
+        !Number.isFinite(info.startedAt)) return null;
+    return { port, session: info.session, startedAt: info.startedAt };
+  } catch { return null; }
+}
+
+async function findConnection() {
+  if (discovery) return discovery;
+  discovery = (async () => {
+    // 同时探测，避免失效缓存拖慢第一笔下载。
+    const ports = activePort ? [activePort, ...PORTS.filter(p => p !== activePort)] : PORTS;
+    const connection = await new Promise((resolve) => {
+      let remaining = ports.length;
+      let settled = false;
+      for (const port of ports) {
+        probeApp(port).then((result) => {
+          if (settled) return;
+          if (result) { settled = true; resolve(result); }
+          else if (--remaining === 0) resolve(null);
+        });
+      }
+    });
+    activePort = connection ? connection.port : null;
+    return connection;
+  })();
+  try { return await discovery; }
+  finally { discovery = null; }
 }
 
 async function ensurePort() {
-  const now = Date.now();
-  if (activePort && now - lastPingTime < 5000) {
-    if (await ping(activePort)) return activePort;
-  }
-  lastPingTime = now;
-  return findPort();
+  const connection = await findConnection();
+  return connection ? connection.port : null;
 }
 
-// ============================================================================
-// 任务队列
-// ============================================================================
-
-async function getQueue() {
-  try {
-    const r = await sessionStore.get(QUEUE_KEY);
-    return Array.isArray(r[QUEUE_KEY]) ? r[QUEUE_KEY] : [];
-  } catch { return []; }
+// 升级时清除旧版离线队列，包括旧版 session 不可用时写入 local 的队列。
+for (const store of [chrome.storage.session, chrome.storage.local]) {
+  if (store) store.remove([QUEUE_KEY, ACTIVE_PORT_KEY]).catch(() => {});
 }
 
-async function setQueue(q) {
-  try { await sessionStore.set({ [QUEUE_KEY]: q.slice(0, MAX_QUEUE) }); } catch {}
+function discardNotice() {
+  notify("下载未交给速下", "速下未运行或连接失败，本次下载已丢弃。打开速下后请重新点击下载。");
 }
 
-async function enqueueTask(item) {
-  const q = await getQueue();
-  if (q.some((t) => t.url === item.url)) return;
-  q.push({ ...item, queuedAt: Date.now() });
-  await setQueue(q);
-}
-
-async function flushQueue() {
-  const q = await getQueue();
-  if (!q.length) return 0;
-  const port = await ensurePort();
-  if (!port) return 0;
-  let sent = 0;
-  const remaining = [];
-  for (const item of q) {
-    const ok = await sendToApp(item, port);
-    if (ok) sent++;
-    else remaining.push(item);
-  }
-  await setQueue(remaining);
-  return sent;
+// 从点击/下载事件开始连接，先确认在线，再读取 Cookie；全程不重新发现或重试。
+async function handoff(payload, capturedAt = Date.now(), connectionPromise = findConnection()) {
+  const connection = await connectionPromise;
+  if (!connection || connection.startedAt > capturedAt || Date.now() - capturedAt > HANDOFF_TTL) return false;
+  await enrichPayload(payload);
+  return sendToApp(payload, connection, capturedAt);
 }
 
 // ============================================================================
 // 文件名推导
 // ============================================================================
+
+// onCreated 的 filename 可能尚未填好。响应头先于下载事件到达，短时保存真实名称。
+// 这里只缓存响应元数据，不缓存下载任务；关闭视频嗅探时也保持有效。
+const responseNames = new Map();
+function responseFilename(headers) {
+  const value = (headers || []).find(h => h.name.toLowerCase() === "content-disposition")?.value || "";
+  const encoded = /filename\*\s*=\s*(?:"([^"\r\n]+)"|([^;\r\n]+))/i.exec(value);
+  if (encoded) {
+    const match = /^UTF-8'[^']*'(.*)$/i.exec((encoded[1] || encoded[2]).trim());
+    if (match) { try { return decodeURIComponent(match[1]); } catch {} }
+  }
+  const plain = /filename\s*=\s*(?:"((?:\\.|[^"\\])*)"|([^;\r\n]+))/i.exec(value);
+  return plain ? (plain[1] || plain[2] || "").replace(/\\(.)/g, "$1").trim() : "";
+}
+chrome.webRequest.onHeadersReceived.addListener((details) => {
+  const filename = responseFilename(details.responseHeaders);
+  if (!filename) { responseNames.delete(details.url); return; }
+  responseNames.set(details.url, { filename, at: Date.now() });
+  if (responseNames.size > 256) responseNames.delete(responseNames.keys().next().value);
+}, { urls: ["http://*/*", "https://*/*"] }, ["responseHeaders"]);
 
 // 哈希名：MD5 32 位 / SHA1 40 位十六进制（蓝奏云等网盘 CDN 的路径名）
 function isHashName(name) {
@@ -249,6 +192,11 @@ function deriveFilename(item) {
   } catch (e) {}
 
   let provided = (item.filename || "").replace(/^.*[\\/]/, "").trim();
+  const response = responseNames.get(urlStr);
+  if (response && Date.now() - response.at < 30000 &&
+      (!provided || provided === pathBase || isHashName(provided))) {
+    return response.filename.replace(/^.*[\\/]/, "").trim();
+  }
   if (queryName && (!provided || provided === pathBase || isHashName(provided))) {
     return queryName;
   }
@@ -325,29 +273,25 @@ async function enrichPayload(payload) {
 // 交给速下
 // ============================================================================
 
-async function sendToApp(item, portOverride) {
-  const port = portOverride || (await ensurePort());
-  if (!port) return false;
+async function sendToApp(item, connection, capturedAt) {
+  const remaining = HANDOFF_TTL - (Date.now() - capturedAt);
+  if (!connection || remaining <= 0) return false;
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 1500);
-    const resp = await fetch(`http://127.0.0.1:${port}/add`, {
+    const response = await localRequest(connection.port, "/add", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-QuickDown-Session": connection.session,
+        "X-QuickDown-Captured-At": String(capturedAt),
+      },
       body: JSON.stringify({
-        url: item.url,
-        filename: item.filename || undefined,
-        referer: item.referer || undefined,
-        userAgent: item.userAgent || undefined,
+        url: item.url, filename: item.filename || undefined,
+        referer: item.referer || undefined, userAgent: item.userAgent || undefined,
         cookie: item.cookie || undefined,
       }),
-      signal: ctrl.signal,
-    });
-    clearTimeout(t);
-    return resp.ok;
-  } catch {
-    return false;
-  }
+    }, Math.min(1500, remaining));
+    return response.ok;
+  } catch { return false; }
 }
 
 // ============================================================================
@@ -380,7 +324,7 @@ function shouldCapture(item) {
   if (isExcluded(url, settings.excluded)) return false;
   if (settings.filter === "media") {
     const mimeOk = item.mime && MEDIA_MIME.test(item.mime);
-    const extOk = MEDIA_RE.test(item.filename || url);
+    const extOk = MEDIA_RE.test(deriveFilename(item) || url);
     if (!mimeOk && !extOk) return false;
   }
   return true;
@@ -429,7 +373,7 @@ function markCaptured(id) {
 }
 
 // onChanged 兜底：cancel 与下载完成竞速失败时（极小文件在毫秒级完成），
-// 浏览器已完成下载。任务早已交给速下，这里删除磁盘文件并抹掉下载历史，
+// 浏览器已完成下载。既然用户要求拦截，这里删除磁盘文件并抹掉下载历史，
 // 不留浏览器下载痕迹。
 chrome.downloads.onChanged.addListener((delta) => {
   if (!capturedIds.has(delta.id)) return;
@@ -443,13 +387,21 @@ chrome.downloads.onChanged.addListener((delta) => {
 });
 
 // ============================================================================
-// 核心接管 —— cancel 之前零 await
+// 核心接管：设置已加载时立即 cancel；冷启动先 pause 再校验设置。
 // ============================================================================
 
 async function takeOver(downloadItem, opts = {}) {
-  // ---- 以下全部同步，第一个 await 是 chrome.downloads.cancel ----
-  if (settings.mode === "off") return;
-  if (!shouldCapture(downloadItem)) return;
+  const capturedAt = Date.now();
+  // 冷启动时不能拿默认设置接管：先暂停，等真实设置；关闭/排除的下载恢复。
+  let paused = false;
+  if (!settingsReady) {
+    try { await chrome.downloads.pause(downloadItem.id); paused = true; } catch {}
+    await settingsLoaded;
+  }
+  if (settings.mode === "off" || !shouldCapture(downloadItem)) {
+    if (paused) { try { await chrome.downloads.resume(downloadItem.id); } catch {} }
+    return;
+  }
 
   const url = downloadItem.finalUrl || downloadItem.url;
   if (!markCaptured(downloadItem.id)) return;
@@ -462,16 +414,18 @@ async function takeOver(downloadItem, opts = {}) {
     // 恒为 undefined），统一由 enrichPayload 用浏览器真实 UA 补全
   };
 
-  // ---- 第一个异步操作：立即取消浏览器下载 ----
-  let cancelOk = false;
-  try {
-    await new Promise((resolve) => {
+  // 先发出取消，再并行探测 App，避免网络工作延迟浏览器拦截。
+  const cancellation = new Promise((resolve) => {
+    try {
       chrome.downloads.cancel(downloadItem.id, () => {
-        cancelOk = !chrome.runtime.lastError;
+        void chrome.runtime.lastError;
         resolve();
       });
-    });
-  } catch (e) {}
+    } catch { resolve(); }
+  });
+  const connectionPromise = findConnection();
+  await cancellation;
+  const delivery = handoff(payload, capturedAt, connectionPromise);
 
   if (opts.eraseFromHistory) {
     // 先删磁盘文件再抹历史：若 cancel 输给了极小文件（浏览器已完成），
@@ -481,56 +435,15 @@ async function takeOver(downloadItem, opts = {}) {
     try { await chrome.downloads.erase({ id: downloadItem.id }); } catch (e) {}
   }
 
-  // 如果 cancel 失败（下载可能已完成），仍交给速下（与 Ghost 行为一致）
-  await enrichPayload(payload);
-  const ok = await sendToApp(payload);
-  if (!ok) {
-    await enqueueTask(payload);
-  }
+  // cancel 输给完成事件时仍按当次请求处理；离线不保留。
+  const ok = await delivery;
+  if (!ok) discardNotice();
 }
 
-// ============================================================================
-// 下载事件监听
-//
-// 策略：
-// - SW 常驻保活（见文件头），onCreated 到达即毫秒级处理，浏览器下载来不及开始
-// - onCreated：100% 触发，负责完整接管逻辑（检查、去重、cancel、发任务）
-// - onChanged：极小文件在 cancel 落地前已完成时，删除文件 + 抹掉历史（见上方兜底）
-// - SW 启动清扫：接管浏览器中已在进行中的下载（扩展装载/更新瞬间的漏网之鱼）
-//
-// 为什么不用 onDeterminingFilename（1.5.0~1.5.2 的教训）：
-// 该事件的 suggest 回调有一套极严格的隐式协议，违反任何一条都会在控制台报错：
-//   ① suggestCallback 必须恰好调用一次 —— 监听器若不同步返回 true，Chrome 会
-//      在监听器返回后立即自动代调一次收尾；之后任何再调用都报
-//      "suggestCallback may not be called more than once"
-//   ② 只能对 in_progress 的下载调用 —— 对已被 cancel 的下载调用报
-//      "Download must be in progress"。而接管流程必然 cancel 下载：cancel 请求
-//      先发出就必先到达（IPC 有序），事后 downloads.search 拦不住（canceled
-//      条目仍在结果里，erase 后的事件派发时序也不定）
-//   ③ 其他扩展若也在监听该事件，先完成目标确定的会让我们的 suggest 落在
-//      已完成的下载上（同 ②）
-// 收益却很小：它只是比 onCreated 更早几百毫秒的拦截点，MV3 上还经常不触发。
-// onCreated + SW 常驻保活已保证毫秒级 cancel，扫尾有 sweepInProgress + alarm。
-// 除非要改下载文件名，否则不要碰这个事件。
-// ============================================================================
-
-// ---- onCreated：完整接管（一定触发）----
+// 下载事件在顶层同步注册，Chrome 可在 SW 冷启动时派发。
 chrome.downloads.onCreated.addListener((item) => {
   void takeOver(item, { eraseFromHistory: true });
 });
-
-// ---- SW 启动清扫：接管浏览器中已在进行中的下载 ----
-// 覆盖扩展刚装载、SW 被强制重启、浏览器恢复下载等事件可能遗漏的场景。
-async function sweepInProgress() {
-  if (settings.mode === "off") return;
-  try {
-    const items = await chrome.downloads.search({ state: "in_progress" });
-    for (const item of items) {
-      void takeOver(item, { eraseFromHistory: true });
-    }
-  } catch (e) {}
-}
-sweepInProgress();
 
 // ============================================================================
 // 视频嗅探
@@ -630,7 +543,7 @@ function applySniffMenu() {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  createMenus();
+  settingsLoaded.then(createMenus);
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -653,51 +566,22 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     filename: undefined,
     referer: tab ? tab.url : undefined,
   };
-  await enrichPayload(payload);
-  const ok = await sendToApp(payload);
+  const ok = await handoff(payload);
   if (ok) {
     notify("已交给速下", "下载已添加到速下。");
   } else {
-    await enqueueTask(payload);
-    notify("速下未运行", "已加入等待队列，速下启动后自动下载。");
+    discardNotice();
   }
 });
 
-// ============================================================================
-// alarms 兜底唤醒 + 队列 flush
-//
-// 常驻保活失效（扩展更新导致 SW 被杀等极端情况）时，由 alarm 在 30 秒内
-// 重新唤醒 SW；顶部 setInterval 保活循环随 SW 启动自动重建。
-// ============================================================================
-
+// alarm 只同步设置，不接管历史下载，也不保存/补发任务。
 function ensureKeepaliveAlarm() {
-  // Chrome 120+ 支持最小 0.5 分钟；旧版本会自动钳制到 1 分钟（仅告警，无害）
   chrome.alarms.create("qd-keepalive", { periodInMinutes: 0.5 });
 }
-
-chrome.runtime.onInstalled.addListener(() => {
-  ensureKeepaliveAlarm();
-});
-
-chrome.runtime.onStartup.addListener(() => {
-  ensureKeepaliveAlarm();
-  sweepInProgress();
-});
-
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== "qd-keepalive") return;
-  keepAliveTick();
-  syncSniffFromApp(); // 同步 App 端视频嗅探总开关
-  // 补扫进行中的下载：SW 曾被杀再唤醒的窗口期内 onCreated 可能已迟到/丢失，
-  // 这里把仍在浏览器里的下载补接管（markCaptured 按 id 去重，已接管的直接跳过）
-  sweepInProgress();
-  const port = await ensurePort();
-  if (port) {
-    const sent = await flushQueue();
-    if (sent > 0) {
-      notify("速下已连接", `已补发 ${sent} 个等待中的下载。`);
-    }
-  }
+chrome.runtime.onInstalled.addListener(ensureKeepaliveAlarm);
+chrome.runtime.onStartup.addListener(ensureKeepaliveAlarm);
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "qd-keepalive") void syncSniffFromApp();
 });
 
 // ============================================================================
@@ -711,14 +595,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.type === "recheck") {
     activePort = null;
-    ensurePort().then(async (port) => {
-      if (port) {
-        const sent = await flushQueue();
-        sendResponse({ connected: !!port, port, queuedFlushed: sent });
-      } else {
-        sendResponse({ connected: false, port: null });
-      }
-    });
+    ensurePort().then((port) => sendResponse({ connected: !!port, port }));
     return true;
   }
   if (msg && msg.type === "getVideos") {
@@ -736,13 +613,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       filename: msg.filename,
       referer: msg.referer || (sender.tab ? sender.tab.url : undefined),
     };
-    enrichPayload(raw).then((payload) => sendToApp(payload)).then(async (ok) => {
-      if (!ok) await enqueueTask(raw);
+    handoff(raw).then((ok) => {
       sendResponse({ ok });
       if (ok) {
         notify("已交给速下", (msg.filename || "视频") + " 正在下载");
       } else {
-        notify("速下未运行", "已加入等待队列，速下启动后自动下载。");
+        discardNotice();
       }
     });
     return true;
@@ -751,4 +627,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // SW 启动：同步一次 App 端嗅探总开关（必须放在文件末尾 ——
 // ensurePort/activePort 等都在前面声明，提前调用会触发 TDZ 引用错误）
-syncSniffFromApp();
+settingsLoaded.then(() => syncSniffFromApp());
