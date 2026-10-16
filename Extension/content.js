@@ -1,5 +1,5 @@
 // 速下 - 网页视频嗅探
-// 悬浮嗅探按钮：鼠标悬停到视频上时出现在视频右上角（含分辨率 / 大小），
+// 悬浮嗅探按钮：靠近视频左侧入口时显示 28px 图标，详情通过 title 提示，
 // 移开消失；视频全屏时不出现。右键菜单「嗅探本页视频」仍可打开列表面板。
 
 (() => {
@@ -61,16 +61,18 @@
   // ==========================================================================
 
   const BASE_CSS =
-    "position:fixed;z-index:2147483647;display:flex;flex-direction:column;gap:2px;" +
-    "align-items:center;padding:6px 12px;border:none;border-radius:10px;cursor:pointer;" +
-    "background:rgba(20,24,22,.88);color:#fff;box-shadow:0 4px 16px rgba(0,0,0,.35);" +
-    "font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;" +
-    "line-height:1.35;user-select:none;";
+    "all:initial;box-sizing:border-box;position:fixed;z-index:2147483647;display:flex;" +
+    "align-items:center;justify-content:center;width:28px;height:28px;padding:0;" +
+    "border:1px solid rgba(126,232,154,.4);border-radius:8px;cursor:pointer;" +
+    "background:rgba(20,24,22,.85);color:#7ee89a;font:18px/1 -apple-system,sans-serif;" +
+    "box-shadow:0 2px 6px rgba(0,0,0,.2);user-select:none;";
 
   function ensureBtn() {
     if (hoverBtn && hoverBtn.isConnected) return hoverBtn;
     hoverBtn = document.createElement("button");
     hoverBtn.id = "qd-hover-btn";
+    hoverBtn.type = "button";
+    hoverBtn.setAttribute("aria-label", "用速下下载视频");
     hoverBtn.style.cssText = BASE_CSS + "display:none;";
     hoverBtn.addEventListener("click", (e) => {
       e.preventDefault();
@@ -78,7 +80,8 @@
       if (hoveredVideo) downloadHovered(hoveredVideo);
     });
     // 阻止按钮上的 mousemove 触发隐藏判定抖动
-    hoverBtn.addEventListener("mousemove", (e) => e.stopPropagation());
+    hoverBtn.addEventListener("mousemove", () => { lastActivityAt = performance.now(); });
+    hoverBtn.addEventListener("mouseleave", hideBtn);
     (document.body || document.documentElement).appendChild(hoverBtn);
     return hoverBtn;
   }
@@ -121,16 +124,10 @@
     const btn = ensureBtn();
     btn.innerHTML = "";
     const row1 = document.createElement("span");
-    row1.textContent = "⬇ 下载视频";
-    row1.style.cssText = "font-size:13px;font-weight:600;color:#7ee89a;white-space:nowrap;";
+    row1.textContent = "↓";
     btn.appendChild(row1);
-
-    const info = document.createElement("span");
     const res = resolutionOf(v);
-    const isHls = isHlsVideo(v);
-    info.textContent = [res, isHls ? "HLS 流 · 合并 MP4" : "…"].filter(Boolean).join(" · ");
-    info.style.cssText = "font-size:11px;color:rgba(255,255,255,.85);white-space:nowrap;";
-    btn.appendChild(info);
+    btn.title = ["用速下下载视频", res, isHlsVideo(v) ? "HLS 流 · 合并 MP4" : ""].filter(Boolean).join(" · ");
 
     // 分辨率在元数据加载后可能才可得（videoWidth=0 → 监听一次）
     if (!res) {
@@ -143,7 +140,7 @@
     sizeOf(v).then((size) => {
       if (hoveredVideo !== v || !hoverBtn || !hoverBtn.isConnected) return;
       const bytes = formatSize(size);
-      if (bytes) info.textContent = [resolutionOf(v), bytes].filter(Boolean).join(" · ");
+      if (bytes) btn.title = ["用速下下载视频", resolutionOf(v), bytes].filter(Boolean).join(" · ");
     });
   }
 
@@ -151,10 +148,10 @@
     const btn = ensureBtn();
     const r = v.getBoundingClientRect();
     btn.style.display = "flex";
-    const bw = btn.offsetWidth || 120;
-    const bh = btn.offsetHeight || 44;
-    let x = r.right - bw - 10;
-    let y = r.top + 10;
+    const bw = btn.offsetWidth || 28;
+    const bh = btn.offsetHeight || 28;
+    let x = r.left >= bw + 8 ? r.left - bw + 2 : r.left + 6;
+    let y = r.top + Math.min(48, r.height / 3);
     x = Math.max(8, Math.min(x, window.innerWidth - bw - 8));
     y = Math.max(8, Math.min(y, window.innerHeight - bh - 8));
     btn.style.left = x + "px";
@@ -181,8 +178,15 @@
     if (now - lastMoveAt < 60) return;
     lastMoveAt = now;
     if (document.fullscreenElement) { hideBtn(); return; } // 全屏时不出按钮
+    if (hoverBtn && hoverBtn.contains(e.target)) return;
     const v = videoAt(e.clientX, e.clientY);
     if (!v) { hideBtn(); return; }
+    const r = v.getBoundingClientRect();
+    // 只在左侧 40px、靠近入口的 72px 高区域唤出，网页其余区域可自由操作。
+    const entryY = r.top + Math.min(48, r.height / 3);
+    if (e.clientX > r.left + 40 || e.clientY < entryY - 16 || e.clientY > entryY + 56) {
+      hideBtn(); return;
+    }
     if (v !== hoveredVideo) {
       hoveredVideo = v;
       renderBtn(v);
@@ -211,10 +215,10 @@
   async function downloadHovered(v) {
     const btn = ensureBtn();
     const row = btn.querySelector("span");
-    if (row) { row.textContent = "⏳ 正在交给速下…"; }
+    if (row) { row.textContent = "…"; btn.title = "正在交给速下…"; }
     const url = await pickUrl(v);
     if (!url) {
-      if (row) { row.textContent = "✕ 未找到视频地址"; }
+      if (row) { row.textContent = "✕"; btn.title = "未找到视频地址"; }
       setTimeout(() => { if (hoveredVideo) renderBtn(hoveredVideo); }, 1500);
       return;
     }
@@ -224,25 +228,19 @@
       : guessName(url);
     try {
       const response = await chrome.runtime.sendMessage({ type: "downloadVideo", url, filename });
-      if (row) { row.textContent = response && response.ok ? "✓ 已交给速下" : "✕ 无法启动速下，本次已丢弃"; }
+      if (row) { row.textContent = response && response.ok ? "✓" : "✕"; btn.title = response && response.ok ? "已交给速下" : "无法启动速下，本次已丢弃"; }
     } catch (e) {
-      if (row) { row.textContent = "✕ 发送失败"; }
+      if (row) { row.textContent = "✕"; btn.title = "发送失败"; }
     }
     setTimeout(() => { if (hoveredVideo) renderBtn(hoveredVideo); }, 1500);
   }
 
   document.addEventListener("mousemove", onMove, { capture: true, passive: true });
-  // 滚动时视频位置变化：仍悬停则跟随，否则隐藏
-  document.addEventListener("scroll", () => {
-    lastActivityAt = performance.now(); // 页面滚动视为活动（鼠标不动但内容在动）
-    if (!hoveredVideo || !hoverBtn || hoverBtn.style.display === "none") return;
-    const r = hoveredVideo.getBoundingClientRect();
-    if (r.width < MIN_W || r.height < MIN_H || r.bottom < 0 || r.top > window.innerHeight) {
-      hideBtn();
-    } else {
-      positionBtn(hoveredVideo);
-    }
-  }, { capture: true, passive: true });
+  // 滚动、离开网页或失去焦点时立即收起，避免悬在无关内容上。
+  document.addEventListener("scroll", hideBtn, { capture: true, passive: true });
+  document.documentElement.addEventListener("mouseleave", hideBtn);
+  window.addEventListener("blur", hideBtn);
+  document.addEventListener("visibilitychange", hideBtn);
   // 进入全屏立即隐藏
   document.addEventListener("fullscreenchange", hideBtn, { capture: true });
   // 兜底：视频被移除/隐藏、进入全屏、鼠标静止过久时清掉按钮

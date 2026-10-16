@@ -1,0 +1,21 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const fs = require('node:fs');
+test('compact video entry stays hidden over page content and dismisses on departure', () => {
+  const events = {}, windowEvents = {}; let clock = 100; let button;
+  const rect = {left:100, top:50, right:900, bottom:550, width:800, height:500};
+  const video = {getBoundingClientRect:()=>rect, videoWidth:1920,videoHeight:1080,currentSrc:'blob:test',isConnected:true};
+  const root = {appendChild(b){button=b;},addEventListener(k,f){events['root:'+k]=f;}};
+  const document = {body:root,documentElement:root,querySelectorAll:s=>s==='video'?[video]:[],addEventListener(k,f){events[k]=f;},createElement(){return {style:{},isConnected:true,appendChild(){},addEventListener(){},setAttribute(){},contains(t){return t===this;},offsetWidth:28,offsetHeight:28};}};
+  const window = {innerWidth:1000,innerHeight:700,addEventListener(k,f){windowEvents[k]=f;}}; window.top=window;
+  vm.runInNewContext(fs.readFileSync('Extension/content.js','utf8'), {document,window,location:{protocol:'https:'},chrome:{storage:{sync:{get(d,f){f(d);}},onChanged:{addListener(){}}},runtime:{onMessage:{addListener(){}}}},performance:{now:()=>clock},getComputedStyle:()=>({}),setInterval(){},setTimeout(){},URL});
+  const move=(x,y,target={})=>{clock+=100;events.mousemove({clientX:x,clientY:y,target});};
+  move(600,100); assert.equal(button,undefined,'ordinary page hover creates no overlay');
+  move(110,110); assert.equal(button.style.display,'flex'); assert.equal(button.style.left,'74px'); assert.match(button.style.cssText,/width:28px;height:28px/);
+  move(600,110);assert.equal(button.style.display,'none');
+  move(110,110);move(80,110,button);assert.equal(button.style.display,'flex','button remains reachable outside video');
+  events.scroll();assert.equal(button.style.display,'none');
+  move(110,110); windowEvents.blur();assert.equal(button.style.display,'none');
+  move(110,110);document.fullscreenElement={};events.fullscreenchange();assert.equal(button.style.display,'none');
+});
