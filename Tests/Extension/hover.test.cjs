@@ -2,7 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-test('compact video entry stays hidden over page content and dismisses on departure', () => {
+test('video center reveals compact entry; outside video and departure dismiss it', () => {
   const events = {}, windowEvents = {}; let clock = 100; let button;
   const rect = {left:100, top:50, right:900, bottom:550, width:800, height:500};
   const video = {getBoundingClientRect:()=>rect, videoWidth:1920,videoHeight:1080,currentSrc:'blob:test',isConnected:true};
@@ -11,9 +11,11 @@ test('compact video entry stays hidden over page content and dismisses on depart
   const window = {innerWidth:1000,innerHeight:700,addEventListener(k,f){windowEvents[k]=f;}}; window.top=window;
   vm.runInNewContext(fs.readFileSync('Extension/content.js','utf8'), {document,window,location:{protocol:'https:'},chrome:{storage:{sync:{get(d,f){f(d);}},onChanged:{addListener(){}}},runtime:{onMessage:{addListener(){}}}},performance:{now:()=>clock},getComputedStyle:()=>({}),setInterval(){},setTimeout(){},URL});
   const move=(x,y,target={})=>{clock+=100;events.mousemove({clientX:x,clientY:y,target});};
-  move(600,100); assert.equal(button,undefined,'ordinary page hover creates no overlay');
+  move(950,100); assert.equal(button,undefined,'outside video creates no overlay');
+  move(600,300); assert.equal(button.style.display,'flex','video center reveals entry');
   move(110,110); assert.equal(button.style.display,'flex'); assert.equal(button.style.left,'74px'); assert.match(button.style.cssText,/width:28px;height:28px/);
-  move(600,110);assert.equal(button.style.display,'none');
+  move(890,540);assert.equal(button.style.display,'flex','opposite video corner reveals entry');
+  move(950,110);assert.equal(button.style.display,'none');
   move(110,110);move(80,110,button);assert.equal(button.style.display,'flex','button remains reachable outside video');
   events.scroll();assert.equal(button.style.display,'none');
   move(110,110); windowEvents.blur();assert.equal(button.style.display,'none');

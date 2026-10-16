@@ -1,5 +1,5 @@
 // 速下 - 网页视频嗅探
-// 悬浮嗅探按钮：靠近视频左侧入口时显示 28px 图标，详情通过 title 提示，
+// 悬浮嗅探按钮：鼠标进入视频范围时显示左侧 28px 图标，详情通过 title 提示，
 // 移开消失；视频全屏时不出现。右键菜单「嗅探本页视频」仍可打开列表面板。
 
 (() => {
@@ -11,7 +11,6 @@
 
   let hoverBtn = null;
   let hoveredVideo = null;
-  let lastMoveAt = 0;
   let lastActivityAt = 0;              // 最近一次鼠标/页面活动时间（闲置自动隐藏用）
   const IDLE_HIDE_MS = 3000;           // 鼠标静止超过 3 秒自动隐藏按钮
   const sizeCache = new Map();         // url -> number|null（探测失败也缓存）
@@ -175,18 +174,10 @@
     const now = performance.now();
     lastActivityAt = now;
     if (!sniffEnabled || !sniffAppEnabled) return; // 嗅探已关闭：不出悬浮按钮
-    if (now - lastMoveAt < 60) return;
-    lastMoveAt = now;
     if (document.fullscreenElement) { hideBtn(); return; } // 全屏时不出按钮
     if (hoverBtn && hoverBtn.contains(e.target)) return;
     const v = videoAt(e.clientX, e.clientY);
     if (!v) { hideBtn(); return; }
-    const r = v.getBoundingClientRect();
-    // 只在左侧 40px、靠近入口的 72px 高区域唤出，网页其余区域可自由操作。
-    const entryY = r.top + Math.min(48, r.height / 3);
-    if (e.clientX > r.left + 40 || e.clientY < entryY - 16 || e.clientY > entryY + 56) {
-      hideBtn(); return;
-    }
     if (v !== hoveredVideo) {
       hoveredVideo = v;
       renderBtn(v);
